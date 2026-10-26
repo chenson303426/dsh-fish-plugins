@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto'
 import { 种子, 骰 } from './plan.js'
 
 const 允许效果 = [
+  'record',
   'extend_activity',
   'interrupt_activity',
   'reschedule_activity',
@@ -95,6 +96,7 @@ function 现在在窗口外(cfg, now) {
 
 // 给模型的输入
 export function 造提示(state, cfg, now) {
+  const 候选 = (cfg.__候选 || []).map((x, i) => (i + 1) + '. ' + x.id + '｜' + x.summaryPattern).join('\n')
   const 计划 = (state.plan || [])
     .filter((it) => it.endAt > now)
     .slice(0, 12)
@@ -113,9 +115,10 @@ export function 造提示(state, cfg, now) {
     '要求：最多 3 个节点、最多 2 个 effect；宁可不提；不要每天都出事。',
     'effect.type 只能是：extend_activity / interrupt_activity / reschedule_activity / replace_future_activity / request_nap。',
     'request_nap 只有在她的午睡或夜睡窗口内才合法（比如午后小睡、晚上看书看困了直接睡），否则不要提。',
-    '示例（不要照抄）：看书看到一半睡着、加班导致晚饭推迟、太累晚上吃了顿好的。',
-    '输出严格 JSON：{"chain":{"reason":"一句理由","nodes":[{"at":"21:10","text":"事实描述"}],"effects":[{"type":"extend_activity","params":{"title":"看《X》","minutes":20},"node":0}]}}',
-    '如果今天不该有事，输出 {"chain":null}。',
+    '从下面这些模板里选一个（只选 id，不要发明）：\n' + 候选,
+    '如果哪个都不合适，返回 {"chain":null}。',
+    '输出严格 JSON：{"chain":{"templateId":"模板id","details":"一句具体的事实描述（≤40字）"}}',
+    'details 只描述实际发生的这一件事，不要写成已完成结果的夸张版本。',
   ].join('\n')
 }
 
@@ -153,7 +156,9 @@ export async function 提候选(ctx, cfg, state, agent, now) {
   } catch (error) {
     return { error: '解析失败' }
   }
-  return { chain: j && j.chain ? j.chain : null, raw: 出.slice(0, 400) }
+  const 链 = j && j.chain ? j.chain : null
+  if (链 && 链.templateId) return { templateId: 链.templateId, details: String(链.details || ''), raw: 出.slice(0, 400) }
+  return { chain: 链, raw: 出.slice(0, 400) }
 }
 
 function 取模型(ctx, cfg, agent) {
@@ -189,6 +194,9 @@ export function 校验链(chain, state, cfg, now) {
   const effects = Array.isArray(chain.effects) ? chain.effects.slice(0, 2) : []
   if (!nodes.length) errs.push('没有节点')
   if (!effects.length) errs.push('没有效果')
+  if (chain.planVersion != null && state && state.planVersion != null && Number(chain.planVersion) !== Number(state.planVersion)) {
+    errs.push('planVersion 过期')
+  }
   const cleanNodes = []
   for (const n of nodes) {
     if (!n || !n.text) { errs.push('节点缺 text'); continue }
@@ -373,6 +381,7 @@ function 后移(plan, 从, 毫秒) {
 }
 
 export function 执行效果(eff, state, now) {
+  if (eff && eff.type === 'record') return { ok: true }
   const plan = state.plan || []
   const p = eff.params || {}
   if (eff.type === 'extend_activity') {

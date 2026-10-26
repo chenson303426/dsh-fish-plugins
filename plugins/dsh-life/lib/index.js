@@ -9,7 +9,8 @@ import { join } from 'node:path'
 import { 生成计划, 抽插曲, 日键 } from './plan.js'
 import { 推进, 渲染, 当前项, 当天插曲 } from './advance.js'
 import { 加意图, 排意图, 结算阅读, 可分享阅读, 日键 as 意日键 } from './intentions.js'
-import { 确保机会, 该试, 提候选, 校验链, 接受链, 执行到点, 写节点事实 } from './chains.js'
+import { 确保机会, 该试, 提候选, 校验链, 接受链, 执行到点, 写节点事实, 能否现在睡 } from './chains.js'
+import { 候选模板, 按模板建链 } from './templates.js'
 
 export const name = 'life'
 export const inject = ['systemPrompt', 'agents', 'timer', 'webServer', 'llm']
@@ -204,21 +205,46 @@ export function apply(ctx) {
         const list = ctx.agents.list() || []
         agent = list.find((a) => 会话id(a.session) === String(cfg.targetSession)) || list[0] || null
       } catch (error) {}
+      // 挑 3~5 个联动模板给模型选（模型只能选 id，不能发明效果）
+      try {
+        const 阅读中 = (状态.plan || []).some((it) => it.objectId && it.startAt <= now && it.endAt > now)
+        const ctxT = {
+          cfg,
+          state: 状态,
+          hasWork: (状态.plan || []).some((it) => it.kind === 'work'),
+          hasMeal: (状态.plan || []).some((it) => it.kind === 'meal' && it.startAt > now),
+          mealSoon: (状态.plan || []).some((it) => it.kind === 'meal' && it.startAt > now && it.startAt - now < 90 * 60000),
+          hasNext: (状态.plan || []).some((it) => it.startAt > now),
+          hasEvening: (状态.plan || []).some((it) => it.kind === 'activity' && new Date(it.startAt).getHours() >= 19),
+          reading: 阅读中,
+          napOk: 能否现在睡(now),
+        }
+        cfg.__候选 = 候选模板(now, ctxT, 5)
+        cfg.__ctx = ctxT
+      } catch (error) { cfg.__候选 = [] }
       const r = await 提候选(ctx, cfg, 状态, agent, now)
-      if (!r || !r.chain) {
+      let 链 = r && r.chain ? r.chain : null
+      if (r && r.templateId && cfg.__ctx) {
+        const tpl = (cfg.__候选 || []).find((x) => x.id === r.templateId)
+        if (tpl) {
+          链 = 按模板建链(tpl, r.details, cfg.__ctx, now, 状态.dayKey || 日键(new Date(now)))
+          记账('模板命中：' + tpl.id)
+        }
+      }
+      if (!链) {
         opp.reason = (r && r.error) || '模型没提'
         记账('链：今天不提（' + opp.reason + '）')
         存状态(状态)
         return
       }
-      记账('链候选：' + (r.chain.nodes || []).length + ' 节点 / ' + (r.chain.effects || []).length + ' 后果')
-      const v = 校验链(r.chain, 状态, cfg, now)
+      记账('链候选：' + (链.nodes || []).length + ' 节点 / ' + (链.effects || []).length + ' 后果')
+      const v = 校验链(链, 状态, cfg, now)
       if (!v.ok) {
         记账('链拒绝：' + v.errors.join('；'))
         存状态(状态)
         return
       }
-      const c = 接受链(状态, r.chain, v, now, 状态.dayKey || 日键(new Date(now)))
+      const c = 接受链(状态, 链, v, now, 状态.dayKey || 日键(new Date(now)))
       记账('链接受：' + (c.reason || '（无理由）') + '｜' + c.effects.map((e) => e.type).join(', '))
       存状态(状态)
     } catch (error) {

@@ -1,17 +1,21 @@
-// dsh-life · 每日计划
+// dsh-life · 日计划生成
 //
-// 确定性：同一天、同一个鱼，重算结果必须一样。
-// 种子 = fishId | 本地日期 | slotId | generatorVersion | purpose
-// 顺序：睡眠窗口（避让）→ 固定安排 → 空闲槽位填活动
+// 确定性：种子 = fishId | 日期 | 槽位 | 版本 | 用途
+// 工作日 / 周末两套模板；周末活动池按类别拆开，每天一个主娱乐块 + 一两个小活动
+// 去重：最近 7 天"实际完成过"的活动进入冷却（连载/带 objectId 的不受限制）
 
-import { createHash } from 'node:crypto'
 import { 排意图 } from './intentions.js'
 
-const 版本 = 1
+const 版本 = 2
 
 export function 种子(...parts) {
-  const h = createHash('sha1').update(parts.join('|')).digest()
-  return h.readUInt32BE(0)
+  const s = parts.map((x) => String(x)).join('|')
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
 }
 
 export function 骰(seed) {
@@ -36,8 +40,9 @@ function 时刻(dayKey, hhmm) {
   return new Date(y, mo - 1, d, h || 0, m || 0, 0, 0).getTime()
 }
 
-// 活动池：theme 越高越容易被抽中
-const 池 = [
+// ---------- 活动池 ----------
+
+const 池_工作日 = [
   { id: 'game', title: '打游戏', theme: { 游戏: 3, 宅: 1 } },
   { id: 'drama', title: '追剧', theme: { 剧: 3, 宅: 1 } },
   { id: 'novel', title: '看小说', theme: { 书: 3, 宅: 1 } },
@@ -52,6 +57,42 @@ const 池 = [
   { id: 'bili', title: '刷 B 站', theme: { 宅: 2 } },
 ]
 
+// 周末池：按类别分开，各类带具体活动
+export const 周末池 = {
+  宅家: [
+    '接着上次的位置读小说',
+    '试做新口味的咖喱',
+    '把拼图拼完一半',
+    '练一个一直没掌握的游戏角色',
+    '挑一部收藏已久的电影配零食',
+    '把阳台的花浇一遍',
+    '重看一集老剧',
+  ],
+  附近外出: [
+    '去旧书店翻书',
+    '沿河走一段路拍照',
+    '去早餐店坐下来吃',
+    '逛花店挑一盆小盆栽',
+    '在公园画几张速写',
+    '去便利店买点没见过的零食',
+  ],
+  半日出行: [
+    '去看一个只逛一个展厅的展',
+    '坐车去吃惦记很久的那家面馆',
+    '骑一条没骑过的绿道',
+    '逛二手市集（设了个小预算）',
+    '去做一次陶艺体验',
+    '去邻区的公园走一圈',
+  ],
+  社交: [
+    '约人打羽毛球',
+    '和朋友一起做晚饭，各做一道菜',
+    '参加一次新手桌游局',
+    '一起去逛文具店',
+    '约着看同一部电影',
+  ],
+}
+
 const 主题池 = ['游戏', '剧', '书', '健身', '外出', '宅', '厨', '音乐']
 
 export function 今日主题(dayKey, fishId) {
@@ -59,26 +100,59 @@ export function 今日主题(dayKey, fishId) {
   return 主题池[Math.floor(r() * 主题池.length)]
 }
 
-function 选活动(dayKey, fishId, slotId, theme) {
-  const r = 骰(种子(fishId, dayKey, slotId, 版本, 'activity'))
-  const 权重 = 池.map((a) => 1 + (a.theme[theme] || 0) * 1.5)
-  const 总 = 权重.reduce((a, b) => a + b, 0)
-  let x = r() * 总
-  for (let i = 0; i < 池.length; i++) {
-    x -= 权重[i]
-    if (x <= 0) return 池[i]
-  }
-  return 池[池.length - 1]
+function 周号(dayKey) {
+  const d = new Date(时刻(dayKey, '12:00'))
+  return d.getDay() === 0 ? 7 : d.getDay()
 }
 
-// 固定锚点（工作日）
+export function 日类型(dayKey, cfg) {
+  const 工作 = (cfg.workdays || [1, 2, 3, 4, 5]).includes(周号(dayKey))
+  return 工作 ? 'workday' : 'restday'
+}
+
+// ---------- 去重 ----------
+
+// 最近 7 天"实际完成过"的活动标题（连载/带 objectId 的除外）
+export function 最近完成过的(状态, dayKey) {
+  const 止 = 时刻(dayKey, '00:00')
+  const 起 = 止 - 7 * 86400000
+  const 表 = new Map()
+  const 源 = (状态 && 状态.archive ? 状态.archive : []).concat(状态 && 状态.plan ? 状态.plan : [])
+  for (const it of 源) {
+    if (!it || it.objectId) continue
+    if (it.status !== 'completed') continue
+    const 末 = Number(it.endAt)
+    if (末 < 起 || 末 > 止) continue
+    const 名 = String(it.title || '')
+    表.set(名, Math.max(表.get(名) || 0, 末))
+  }
+  return 表
+}
+
+function 可用(标题, 冷却) {
+  if (!冷却 || !冷却.size) return true
+  return !冷却.has(String(标题))
+}
+
+// 词穷时挑"最久没做过"的，保证 7 天内不重复
+function 最久没做(列表, 冷却) {
+  if (!冷却 || !冷却.size) return 列表[0]
+  let 最好 = 列表[0]
+  let 最早 = Infinity
+  for (const x of 列表) {
+    const 末 = 冷却.get(String(x.title || x)) || 0
+    if (末 < 最早) { 最早 = 末; 最好 = x }
+  }
+  return 最好
+}
+
+// ---------- 固定锚点 ----------
+
 function 固定安排(dayKey, cfg) {
-  const d = new Date(时刻(dayKey, '12:00'))
-  const 周 = d.getDay() === 0 ? 7 : d.getDay()
-  const 工作 = (cfg.workdays || [1, 2, 3, 4, 5]).includes(周)
   const 出 = []
-  const 加 = (slotId, kind, title, a, b) => 出.push({ id: dayKey + ':' + slotId, slotId, kind, title, startAt: 时刻(dayKey, a), endAt: 时刻(dayKey, b) })
-  if (工作) {
+  const 加 = (slotId, kind, title, a, b) =>
+    出.push({ id: dayKey + ':' + slotId, slotId, kind, title, startAt: 时刻(dayKey, a), endAt: 时刻(dayKey, b) })
+  if (日类型(dayKey, cfg) === 'workday') {
     加('commute-out', 'commute', '出门上班', '08:30', '09:00')
     加('work-am', 'work', '上班', '09:00', '12:00')
     加('lunch', 'meal', '午饭', '12:00', '12:40')
@@ -87,18 +161,17 @@ function 固定安排(dayKey, cfg) {
     加('dinner', 'meal', '晚饭', '19:00', '19:40')
   } else {
     加('brunch', 'meal', '早午饭', '10:30', '11:10')
-    加('outing', 'out', '出门逛逛', '14:00', '17:00')
     加('dinner', 'meal', '晚饭', '19:00', '19:40')
+    加('chores', 'chore', '收拾屋子', '20:30', '21:00')
   }
   return 出
 }
 
-// 与睡眠区间求差：把落在睡眠里的部分裁掉
 function 避开睡眠(items, 睡眠段) {
   const 出 = []
   for (const it of items) {
     let 段 = [[it.startAt, it.endAt]]
-    for (const s of 睡眠段) {
+    for (const s of 睡眠段 || []) {
       const 下一 = []
       for (const [a, b] of 段) {
         if (b <= s[0] || a >= s[1]) {
@@ -115,19 +188,7 @@ function 避开睡眠(items, 睡眠段) {
   return 出
 }
 
-export function 生成计划(dayKey, cfg, 睡眠段, 生活状态) {
-  const fishId = cfg.fishId || 'fish:default'
-  const 主题 = 今日主题(dayKey, fishId)
-  let items = 固定安排(dayKey, cfg).filter((it) => it.kind !== 'meal' || true)
-  items = 避开睡眠(items, 睡眠段)
-
-  // 她自己的安排：优先于空闲抽活动（局部替换，不占满整晚）
-  let 排了 = 0
-  try { if (生活状态) 排了 = 排意图(生活状态, cfg, dayKey, items) } catch (error) {}
-
-  // 空闲填充：把 08:00–22:30 里没被占的缺口切成 60~90 分钟
-  const 起 = 时刻(dayKey, '08:00')
-  const 止 = 时刻(dayKey, '22:30')
+function 缺口们(items, 起, 止) {
   const 占 = items.map((it) => [it.startAt, it.endAt]).sort((a, b) => a[0] - b[0])
   const 缺口 = []
   let cur = 起
@@ -136,32 +197,119 @@ export function 生成计划(dayKey, cfg, 睡眠段, 生活状态) {
     cur = Math.max(cur, b)
   }
   if (cur < 止) 缺口.push([cur, 止])
-
-  let n = 0
-  let lastTitle = ''
-  for (const [a, b] of 缺口) {
-    let t = a
-    while (b - t >= 45 * 60000) {
-      const slotId = 'free' + n++
-      const r = 骰(种子(fishId, dayKey, slotId, 版本, 'len'))
-      const 长 = (60 + Math.floor(r() * 31)) * 60000
-      const 结束 = Math.min(b, t + 长)
-      let 活动 = 选活动(dayKey, fishId, slotId, 主题)
-      if (活动.title === lastTitle) {
-        const 下一个 = 池[(池.findIndex((x) => x.id === 活动.id) + 1) % 池.length]
-        活动 = 下一个
-      }
-      lastTitle = 活动.title
-      items.push({ id: dayKey + ':' + slotId, slotId, kind: 'activity', title: 活动.title, startAt: t, endAt: 结束 })
-      t = 结束
-    }
-  }
-  items = 避开睡眠(items, 睡眠段)
-  items.sort((a, b) => a.startAt - b.startAt)
-  return { theme: 主题, items }
+  return 缺口.filter(([a, b]) => b - a >= 20 * 60000)
 }
 
-// 插曲池
+// ---------- 选活动 ----------
+
+function 选活动(dayKey, fishId, slotId, theme, 冷却, 已用) {
+  const r = 骰(种子(fishId, dayKey, slotId, 版本, 'activity'))
+  const 候选 = 池_工作日.filter((a) => 可用(a.title, 冷却) && !(已用 && 已用.has(a.title)))
+  const 表 = 候选.length ? 候选 : [最久没做(池_工作日, 冷却)]
+  const 权重 = 表.map((a) => 1 + (a.theme[theme] || 0) * 1.5)
+  const 总 = 权重.reduce((a, b) => a + b, 0)
+  let x = r() * 总
+  for (let i = 0; i < 表.length; i++) {
+    x -= 权重[i]
+    if (x <= 0) return 表[i]
+  }
+  return 表[表.length - 1]
+}
+
+function 选周末活动(dayKey, fishId, slotId, 类别, 冷却, 已用) {
+  const 全 = 周末池[类别] || 周末池.宅家
+  let 表 = 全.filter((t) => 可用(t, 冷却) && !(已用 && 已用.has(t)))
+  if (!表.length) 表 = 全.filter((t) => !(已用 && 已用.has(t)))
+  if (!表.length) 表 = 全
+  const 用 = 表.length ? 表 : [最久没做(全.map((title) => ({ title })), 冷却).title]
+  const r = 骰(种子(fishId, dayKey, slotId, 版本, 'weekend'))
+  return 用[Math.floor(r() * 用.length)]
+}
+
+function 选类别(dayKey, fishId) {
+  const r = 骰(种子(fishId, dayKey, 'category', 版本, 'pick'))
+  const x = r()
+  if (x < 0.45) return '宅家'
+  if (x < 0.7) return '附近外出'
+  if (x < 0.88) return '半日出行'
+  return '社交'
+}
+
+// ---------- 生成 ----------
+
+export function 生成计划(dayKey, cfg, 睡眠段, 生活状态) {
+  const fishId = cfg.fishId || 'fish:default'
+  const 主题 = 今日主题(dayKey, fishId)
+  const 类型 = 日类型(dayKey, cfg)
+  const 冷却 = 最近完成过的(生活状态, dayKey)
+  const 今日已用 = new Set()
+  let items = 固定安排(dayKey, cfg)
+  items = 避开睡眠(items, 睡眠段)
+
+  // 她自己的安排优先
+  let 排了 = 0
+  try {
+    if (生活状态) 排了 = 排意图(生活状态, cfg, dayKey, items)
+  } catch (error) {}
+
+  if (类型 === 'restday') {
+    // 主娱乐块：13:30 起，90~180 分钟
+    const 类 = 选类别(dayKey, fishId)
+    const r1 = 骰(种子(fishId, dayKey, 'main', 版本, 'len'))
+    const 主长 = (90 + Math.floor(r1() * 91)) * 60000
+    const 主起 = 时刻(dayKey, '13:30')
+    const 主止 = 主起 + 主长
+    if (!items.some((it) => it.startAt < 主止 && it.endAt > 主起)) {
+      const 标题 = 选周末活动(dayKey, fishId, 'main', 类, 冷却, 今日已用)
+      今日已用.add(标题)
+      items.push({ id: dayKey + ':main', slotId: 'main', kind: 'activity', title: 标题, category: 类, startAt: 主起, endAt: 主止 })
+    }
+    // 小活动：一到两个 20~60 分钟，填剩余空隙
+    const 小槽 = 缺口们(items.sort((a, b) => a.startAt - b.startAt), 时刻(dayKey, '08:00'), 时刻(dayKey, '22:30'))
+    let 放 = 0
+    for (const [a, b] of 小槽) {
+      if (放 >= 2) break
+      if (a < 时刻(dayKey, '11:00')) continue // 早上的空档留给睡醒和早午饭，不塞活动
+      const r2 = 骰(种子(fishId, dayKey, 'small' + 放, 版本, 'len'))
+      const 长 = (20 + Math.floor(r2() * 41)) * 60000
+      if (b - a < 长) continue
+      const 类2 = 类 === '半日出行' ? '宅家' : 选类别(dayKey, fishId)
+      const 标题 = 选周末活动(dayKey, fishId, 'small' + 放, 类2, 冷却, 今日已用)
+      今日已用.add(标题)
+      items.push({ id: dayKey + ':small' + 放, slotId: 'small' + 放, kind: 'activity', title: 标题, category: 类2, startAt: a, endAt: a + 长 })
+      放++
+    }
+  } else {
+    // 工作日：把缺口切成 60~90 分钟活动
+    const 缺口 = 缺口们(items.sort((a, b) => a.startAt - b.startAt), 时刻(dayKey, '08:00'), 时刻(dayKey, '22:30'))
+    let n = 0
+    let lastTitle = ''
+    for (const [a, b] of 缺口) {
+      let t = a
+      while (b - t >= 45 * 60000) {
+        const slotId = 'free' + n++
+        const r = 骰(种子(fishId, dayKey, slotId, 版本, 'len'))
+        const 长 = (60 + Math.floor(r() * 31)) * 60000
+        const 结束 = Math.min(b, t + 长)
+        let 活动 = 选活动(dayKey, fishId, slotId, 主题, 冷却, 今日已用)
+        if (活动.title === lastTitle) {
+          const 下一个 = 池_工作日[(池_工作日.findIndex((x) => x.id === 活动.id) + 1) % 池_工作日.length]
+          活动 = 下一个
+        }
+        lastTitle = 活动.title
+        今日已用.add(活动.title)
+        items.push({ id: dayKey + ':' + slotId, slotId, kind: 'activity', title: 活动.title, startAt: t, endAt: 结束 })
+        t = 结束
+      }
+    }
+  }
+
+  items = 避开睡眠(items.sort((a, b) => a.startAt - b.startAt), 睡眠段)
+  return { theme: 主题, dayTemplate: 类型, items }
+}
+
+// ---------- 插曲 ----------
+
 const 工作插曲 = [
   '被领导点名说方案要改',
   '同事请了奶茶',
