@@ -164,7 +164,15 @@ export function 排意图(state, cfg, dayKey, dayItems) {
       可挪.startAt = 够[1]
       if (可挪.endAt - 可挪.startAt < 20 * 60000) {
         const idx = dayItems.indexOf(可挪)
-        if (idx >= 0) dayItems.splice(idx, 1)
+        if (idx >= 0) {
+          可挪.status = 可挪.status === 'running' ? 'interrupted' : 'skipped'
+          可挪.ranMinutes = 可挪.status === 'interrupted'
+            ? Math.max(0, (Date.now() - (可挪.startedAt || 可挪.startAt)) / 60000)
+            : 0
+          可挪.plannedMinutes = (可挪.endAt - 可挪.startAt) / 60000
+          state.archive = (state.archive || []).concat([可挪]).slice(-50)
+          dayItems.splice(idx, 1)
+        }
       }
     }
     const id = dayKey + ':intent:' + it.id
@@ -188,8 +196,11 @@ export function 排意图(state, cfg, dayKey, dayItems) {
   return 排了几条
 }
 
-// 阅读结算：只有真正跑完（或部分完成）才推进；同一 activityId 只算一次
-export function 结算阅读(state, item, at, 完成比例 = 1) {
+// 阅读结算：按运行状态折算，同一 activityId 只算一次
+// 选项：{ status: 'completed'|'interrupted'|'skipped', plannedMinutes, ranMinutes }
+export function 结算阅读(state, item, at, 选项 = {}) {
+  const opt = typeof 选项 === 'number' ? { status: 'completed', ratio: 选项 } : (选项 || {})
+  const status = String(opt.status || 'completed')
   state.readings = state.readings || []
   const object = item.objectId ? (state.objects || []).find((o) => o.objectId === item.objectId) : null
   if (!object) return null
@@ -202,17 +213,35 @@ export function 结算阅读(state, item, at, 完成比例 = 1) {
   }
   const activityId = String(item.id || item.slotId)
   if (state.readings.some((r) => r.activityId === activityId)) return { duplicate: true }
+
   const 总章 = (object.chapters && object.chapters.length) || 0
   if (!总章) return null
-  const 想读 = Math.max(1, Math.round(2 + Math.random())) // 2~3 章
-  const 可读 = Math.min(想读, Math.max(1, Math.round(想读 * Math.max(0, Math.min(1, 完成比例)))))
+
+  const 计划分 = Number(opt.plannedMinutes) || Math.max(1, (Number(item.endAt) - Number(item.startAt)) / 60000)
+  const 实跑分 = Number(opt.ranMinutes)
+  const 比例 = status === 'completed' ? 1 : Math.max(0, Math.min(1, (Number.isFinite(实跑分) ? 实跑分 : 0) / 计划分))
+
+  let 章数
+  if (status === 'completed') {
+    // 2~3 章，按 activityId 确定性分配（不用 Math.random，重算不跳）
+    章数 = 2 + (骰(种子(activityId, 'chapters'))() < 0.5 ? 0 : 1)
+  } else if (status === 'interrupted') {
+    章数 = Math.floor(2.5 * 比例)
+  } else {
+    章数 = 0
+  }
+
   const from = object.nextPosition
-  const to = Math.min(总章, from + 可读)
-  if (to <= from) return { objectId: object.objectId, progress: 0 }
-  state.readings.push({ activityId, objectId: object.objectId, fromPosition: from, toPosition: to, completedAt: at, dayKey: 日键(new Date(at)) })
-  object.nextPosition = to
-  object.lastReadAt = at
-  return { objectId: object.objectId, fromPosition: from, toPosition: to, chapter: to }
+  const to = Math.min(总章, from + Math.max(0, 章数))
+  state.readings.push({
+    activityId, objectId: object.objectId, fromPosition: from, toPosition: to,
+    completedAt: at, dayKey: 日键(new Date(at)), status, ranMinutes: Math.round(实跑分 || 0), plannedMinutes: Math.round(计划分),
+  })
+  if (to > from) {
+    object.nextPosition = to
+    object.lastReadAt = at
+  }
+  return { objectId: object.objectId, fromPosition: from, toPosition: to, chapter: to, status, 章数: to - from }
 }
 
 // 可分享的阅读记录（sulk 用）：新、未分享、同书 48h 内没提过、7 天内最多 2 次

@@ -84,6 +84,16 @@ export function 推进(state, cfg, now, 抽插曲, 命) {
 
   const 睡眠 = state.asleep === true
   if (睡眠) {
+    // 睡着：先把正在跑的活动按"打断"结算掉
+    const 在跑 = 当前项(state, now)
+    if (在跑 && 在跑.status === 'running') {
+      const 计划分 = Math.max(1, (在跑.endAt - 在跑.startAt) / 60000)
+      const 实跑 = Math.max(0, Math.min(计划分, (now - (在跑.startedAt || 在跑.startAt)) / 60000))
+      在跑.plannedMinutes = 计划分
+      在跑.ranMinutes = 实跑
+      在跑.status = 'interrupted'
+      events.push({ type: 'ended', item: 在跑, at: now, status: 'interrupted', ranMinutes: 实跑, 打断: 'sleep' })
+    }
     // 睡着：不推进活动，只把精力补一点
     needs.energy = Math.min(100, needs.energy + 6 * 小时)
     state.lastAdvanceAt = now
@@ -97,6 +107,8 @@ export function 推进(state, cfg, now, 抽插曲, 命) {
     for (const it of plan) {
       if (it.startAt > t - 步长 && it.startAt <= t) {
         state.active = it.id
+        it.status = 'running'
+        it.startedAt = it.startAt
         events.push({ type: 'started', item: it, at: it.startAt })
         if (it.kind === 'meal') needs.fullness = Math.min(100, needs.fullness + 25)
         if (it.kind === 'work') needs.energy = Math.max(0, needs.energy - 2)
@@ -113,7 +125,13 @@ export function 推进(state, cfg, now, 抽插曲, 命) {
       }
       if (it.endAt > t - 步长 && it.endAt <= t) {
         if (state.active === it.id) state.active = null
-        events.push({ type: 'ended', item: it, at: it.endAt })
+        const 计划分 = Math.max(1, (it.endAt - it.startAt) / 60000)
+        const 起点 = Number(it.startedAt) || it.startAt
+        const 实跑 = Math.max(0, Math.min(计划分, (it.endAt - 起点) / 60000))
+        it.plannedMinutes = 计划分
+        it.ranMinutes = 实跑
+        it.status = it.startedAt ? (实跑 >= 计划分 - 1 ? 'completed' : 'interrupted') : 'skipped'
+        events.push({ type: 'ended', item: it, at: it.endAt, status: it.status, ranMinutes: it.ranMinutes })
       }
     }
     // 意外事件：每天 ≤1，占用总预算
@@ -121,6 +139,24 @@ export function 推进(state, cfg, now, 抽插曲, 命) {
       const 文 = 抽插曲('accident', state.dayKey, fishId, 'accident' + Math.floor(t / 3600000), 当天插曲(state, state.dayKey).length)
       记插曲(命.家, state, state.dayKey, 'accident', 文, t, 'accident')
       events.push({ type: 'incident', text: 文, at: t })
+    }
+  }
+
+  // 补账：区间已过但没记状态（离线折叠 / 被新计划顶掉）
+  for (const it of plan) {
+    if (it.status) continue
+    if (it.endAt > now) continue
+    const 计划分 = Math.max(1, (it.endAt - it.startAt) / 60000)
+    it.plannedMinutes = 计划分
+    if (it.startedAt) {
+      const 实跑 = Math.max(0, Math.min(计划分, (it.endAt - it.startedAt) / 60000))
+      it.ranMinutes = 实跑
+      it.status = 'interrupted'
+      events.push({ type: 'ended', item: it, at: it.endAt, status: 'interrupted', ranMinutes: 实跑, 打断: 'recover' })
+    } else {
+      it.ranMinutes = 0
+      it.status = 'skipped'
+      events.push({ type: 'ended', item: it, at: it.endAt, status: 'skipped', ranMinutes: 0, 打断: 'never' })
     }
   }
 

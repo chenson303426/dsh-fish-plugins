@@ -16,6 +16,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { openStore, ensureObject, getObject, insertEvent, insertMatter, openMatters, updateObject, updateMatter, updateEventResult, recordSilence, insertExpectation, pendingExpectations, closeExpectation } from './store.js'
 import { renderContext } from './render.js'
 import { loadTime, saveTime, onUser, onReply, renderTime } from './time.js'
+import { 载入 as 载入日记, 保存 as 保存日记, 写入 as 写入日记, 取 as 取日记, 最近 as 最近日记, 解析日期 as 解析日记日期, 是翻日记请求, 渲染 as 渲染日记, 日键 as 日记日键 } from './diary.js'
 import { 默认规则, loadAvailability, saveAvailability, ensureDay, coveredMs, isAsleep, tickSleepLog, renderSleepLog, activityAt } from './availability.js'
 
 export const name = 'feeling'
@@ -170,6 +171,11 @@ export function apply(ctx) {
   写默认配置()
   let cfg = 读配置()
   const db = openStore(join(库目录, 'feeling.db'))
+  const 日记路径 = join(库目录, 'diary.json')
+  let 日记 = 载入日记(日记路径)
+  let 日记命中 = null
+  let 上次日记尝试 = 0
+  let 当前agent = null
   const 时间路径 = join(库目录, 'time.json')
   const 作息规则路径 = join(家, 'availability-config.json')
   const 作息状态路径 = join(库目录, 'availability-state.json')
@@ -367,6 +373,7 @@ export function apply(ctx) {
   }
 
   function 挂到(agent, sid) {
+    当前agent = agent
     let 最近文本 = ''
     let 最近id = ''
     const offs = []
@@ -380,6 +387,20 @@ export function apply(ctx) {
           if (!txt) return
           最近文本 = txt
           最近id = String((msg && msg.id) || '')
+          // 日记：只在被要求时查；命中后只在下一轮注入一次
+          try {
+            if (是翻日记请求(txt)) {
+              const 命中日 = 解析日记日期(txt) || []
+              let 取到 = []
+              for (const h of 命中日) {
+                const e = 取日记(日记, h.date)
+                if (e) 取到.push(e)
+              }
+              if (!取到.length) 取到 = 最近日记(日记, 3)
+              日记命中 = 取到
+              记账('翻日记：' + (取到.length ? 取到.map((e) => e.date).join(',') : '没有记录'))
+            }
+          } catch (error) {}
           // 时间感：记录来信时间 / 交流段 / 结束方式
           try {
             // 约定达成：来信落在截止时间±宽限内
@@ -460,6 +481,26 @@ export function apply(ctx) {
     } catch (error) {
       记账('注册注入失败：' + String(error && error.message))
     }
+    try {
+      offs.push(
+        agent.ctx.systemPrompt.context({
+          name: 'diary',
+          order: 905,
+          text: () => {
+            try {
+              if (!日记命中 || !日记命中.length) return ''
+              const 出 = 日记命中.map(渲染日记).filter(Boolean).join('\n')
+              日记命中 = null
+              return 出
+            } catch (error) {
+              return ''
+            }
+          },
+        }),
+      )
+    } catch (error) {
+      记账('注册日记注入失败：' + String(error && error.message))
+    }
     return () => {
       for (const off of offs) {
         try {
@@ -523,6 +564,66 @@ export function apply(ctx) {
     } catch (error) {}
   }
 
+  function 读心情值() {
+    try {
+      const s = JSON.parse(readFileSync(join(家, 'mood', 'state.json'), 'utf8').replace(/^\uFEFF/, ''))
+      return Number(s.mood) || 0
+    } catch (error) {
+      return 0
+    }
+  }
+
+  // 惰性日记：每天最多试一次，补写「昨天」，空白日跳过
+  async function 生成昨日日记() {
+    try {
+      if (!cfg.enabled) return
+      if (Date.now() - 上次日记尝试 < 30 * 60000) return
+      上次日记尝试 = Date.now()
+      const 昨 = new Date()
+      昨.setDate(昨.getDate() - 1)
+      昨.setHours(0, 0, 0, 0)
+      const key = 日记日键(昨)
+      if (取日记(日记, key)) return
+      const from = 昨.getTime()
+      const to = from + 86400000
+      const rows = db
+        .prepare('SELECT id, kind, interpretation, evidence FROM events WHERE at >= ? AND at < ? ORDER BY at LIMIT 20')
+        .all(from, to)
+      const 素材 = rows.map((r) => String(r.interpretation || r.evidence || r.kind || '').trim()).filter(Boolean)
+      if (!素材.length) return
+      const t = 取模型(ctx, 当前agent, cfg)
+      if (!t) return
+      const 系统 = [
+        '你在替一条鱼写昨天的日记。',
+        '只写昨天真正发生过的事，第一人称、口语、短句，3~5 条，每条不超过 40 字。',
+        '不要编号、不要日期、不要总结成大道理、不要编造素材里没有的事。',
+        '只输出 JSON：{"lines":["…","…","…"]}',
+      ].join('\n')
+      const 输入 = '昨天发生的事：\n' + 素材.map((x) => '· ' + x).join('\n') + '\n昨天的心情值：' + 读心情值()
+      let 出 = ''
+      for await (const chunk of ctx.llm.stream({
+        provider: t.provider,
+        model: t.model,
+        system: 系统,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 输入 }], source: { kind: 'plugin', plugin: 'dsh-feeling' } }],
+        maxTokens: 500,
+        temperature: 0.7,
+      })) {
+        if (chunk && chunk.type === 'text-delta') 出 += chunk.text
+      }
+      const m = 出.match(/\{[\s\S]*\}/)
+      if (!m) return
+      const j = JSON.parse(m[0])
+      const lines = (j.lines || []).map((x) => String(x).trim().slice(0, 40)).filter(Boolean).slice(0, 5)
+      if (lines.length < 2) return
+      写入日记(日记, { date: key, lines, mood: 读心情值(), sourceEventIds: rows.map((r) => r.id), generatedAt: Date.now() })
+      保存日记(日记路径, 日记)
+      记账('写了 ' + key + ' 的日记（' + lines.length + ' 条）')
+    } catch (error) {
+      记账('日记生成失败：' + String(error && error.message))
+    }
+  }
+
   function tick() {
     检查约定();
     try {
@@ -547,6 +648,7 @@ export function apply(ctx) {
       saveAvailability(作息文件, 作息)
     } catch (error) {}
     导入观察();
+    void 生成昨日日记();
     try {
       cfg = 读配置()
       if (!cfg.targetSession) return
@@ -607,6 +709,39 @@ export function apply(ctx) {
     ctx.effect(() => ctx.interval(tick, 3000))
   } catch (error) {
     记账('注册作息设置页失败：' + String(error && error.message))
+  }
+  // 日记读取接口
+  try {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact',
+      path: '/dsh-feeling/diary',
+      handler: async (req, res) => {
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        try {
+          const u = new URL(req.url, 'http://x')
+          const date = u.searchParams.get('date') || ''
+          if (!date) {
+            res.end(JSON.stringify({ ok: true, recent: 最近日记(日记, 7) }))
+            return
+          }
+          const e = 取日记(日记, date)
+          res.end(JSON.stringify({ ok: true, entry: e, text: e ? 渲染日记(e) : '' }))
+        } catch (error) {
+          res.statusCode = 500
+          res.end(JSON.stringify({ ok: false, error: String(error && error.message) }))
+        }
+      },
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact',
+      path: '/dsh-feeling/diary/list',
+      handler: async (req, res) => {
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.end(JSON.stringify({ ok: true, dates: (日记.entries || []).map((e) => e.date) }))
+      },
+    }))
+  } catch (error) {
+    记账('注册日记接口失败：' + String(error && error.message))
   }
   ctx.effect(() => () => {
     for (const [, off] of mounted) {

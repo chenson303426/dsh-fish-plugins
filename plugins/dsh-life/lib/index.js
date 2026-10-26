@@ -127,6 +127,31 @@ export function apply(ctx) {
     return true
   }
 
+  // 活动结束后统一结算（running/completed/interrupted/skipped 由 advance 标注）
+  function 结算已结束(now) {
+    const 所有 = (状态.plan || []).concat(状态.archive || [])
+    for (const it of 所有) {
+      if (!['completed', 'interrupted', 'skipped'].includes(it.status)) continue
+      if (it.settled) continue
+      if (!it.objectId) { it.settled = true; continue }
+      const 计划分 = Number(it.plannedMinutes) || Math.max(1, (it.endAt - it.startAt) / 60000)
+      const 实跑分 = Number(it.ranMinutes) || 0
+      const 结果 = 结算阅读(状态, it, Number(it.endAt) || now, { status: it.status, plannedMinutes: 计划分, ranMinutes: 实跑分 })
+      it.settled = true
+      it.settledResult = 结果 || null
+      if (!结果) continue
+      if (结果.duplicate) { 记账('重复结算已跳过：' + it.title); continue }
+      if (it.status === 'interrupted') {
+        记账('打断：' + it.title + ' 读了 ' + Math.round(实跑分) + '/' + Math.round(计划分) + ' 分钟，结算 ' + (结果.章数 || 0) + ' 章')
+      } else if (it.status === 'skipped') {
+        记账('没开始：' + it.title)
+      } else {
+        记账('读完：' + it.title + '，结算 ' + (结果.章数 || 0) + ' 章')
+      }
+    }
+    if (状态.archive) 状态.archive = 状态.archive.slice(-50)
+  }
+
   const 上次结束 = new Map()
   function 走一步(手动) {
     try {
@@ -146,6 +171,7 @@ export function apply(ctx) {
         }
       }
       if (结果.collapsed) 记账('离线太久，已经折叠（只排当前状态）')
+      结算已结束(now)
       存状态(状态)
       return 结果
     } catch (error) {
