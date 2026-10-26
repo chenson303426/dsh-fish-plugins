@@ -8,6 +8,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { 生成计划, 抽插曲, 日键 } from './plan.js'
 import { 推进, 渲染, 当前项, 当天插曲 } from './advance.js'
+import { 加意图, 排意图, 结算阅读, 可分享阅读, 日键 as 意日键 } from './intentions.js'
 
 export const name = 'life'
 export const inject = ['systemPrompt', 'agents', 'timer', 'webServer']
@@ -69,7 +70,7 @@ function 读状态() {
   try {
     return JSON.parse(readFileSync(状态路径, 'utf8'))
   } catch (error) {
-    return { dayKey: '', plan: [], incidents: [], needs: { energy: 70, fullness: 70, social: 60 }, lastAdvanceAt: 0, active: null }
+    return { dayKey: '', plan: [], incidents: [], needs: { energy: 70, fullness: 70, social: 60 }, lastAdvanceAt: 0, active: null, intentions: [], objects: [], readings: [], shares: [], reservations: [], planVersion: 1, planChanges: [] }
   }
 }
 
@@ -116,7 +117,7 @@ export function apply(ctx) {
   function 必要时重排() {
     const dayKey = 日键(new Date())
     if (状态.dayKey === dayKey && Array.isArray(状态.plan) && 状态.plan.length) return false
-    const { theme, items } = 生成计划(dayKey, cfg, 读睡眠段(dayKey))
+    const { theme, items } = 生成计划(dayKey, cfg, 读睡眠段(dayKey), 状态)
     状态.dayKey = dayKey
     状态.plan = items
     状态.incidents = (状态.incidents || []).filter((x) => x.dayKey === dayKey)
@@ -126,6 +127,7 @@ export function apply(ctx) {
     return true
   }
 
+  const 上次结束 = new Map()
   function 走一步(手动) {
     try {
       状态.asleep = 读睡着()
@@ -134,7 +136,12 @@ export function apply(ctx) {
       if (结果.events && 结果.events.length) {
         for (const e of 结果.events) {
           if (e.type === 'started') 记账('开始：' + e.item.title + ' → ' + new Date(e.at).toLocaleTimeString('zh-CN', { hour12: false }))
-          if (e.type === 'ended') 记账('结束：' + e.item.title)
+          if (e.type === 'ended') {
+            const k = (e.item.id || e.item.title) + '@' + (e.item.endAt || e.item.end || '')
+            if (上次结束.get(k)) continue
+            上次结束.set(k, true)
+            记账('结束：' + e.item.title)
+          }
           if (e.type === 'incident') 记账('插曲：' + e.text)
         }
       }
@@ -188,7 +195,13 @@ export function apply(ctx) {
           text: () => {
             try {
               if (!cfg.enabled || cfg.inject === false) return ''
-              return 渲染(状态, Date.now(), Number(cfg.injectMaxChars) || 80)
+              const 行 = 渲染(状态, Date.now(), Number(cfg.injectMaxChars) || 80)
+              // 每次注入留痕（5 分钟内只记一次），方便确认她真的收到了
+              if (行 && Date.now() - (globalThis.__life_注入日志 || 0) > 5 * 60000) {
+                globalThis.__life_注入日志 = Date.now()
+                记账('注入：' + 行)
+              }
+              return 行
             } catch (error) {
               return ''
             }
@@ -251,6 +264,15 @@ export function apply(ctx) {
                 end: new Date(it.endAt).toTimeString().slice(0, 5),
               })),
               preview: 渲染(状态, now, Number(cfg.injectMaxChars) || 80),
+              intentions: (状态.intentions || []).slice(-20).map((x) => ({
+                id: x.id, title: x.title, status: x.status, strength: x.strength,
+                windowStart: x.windowStart, windowEnd: x.windowEnd, minutes: x.minutes,
+              })),
+              objects: (状态.objects || []).map((o) => ({
+                objectId: o.objectId, title: o.title, contentMode: o.contentMode,
+                materialKind: o.materialKind, nextPosition: o.nextPosition,
+                chapters: (o.chapters || []).length, pendingMaterial: Boolean(o.pendingMaterial),
+              })),
             })
           } catch (error) {
             json(res, { ok: false, error: String(error && error.message) }, 500)
@@ -293,6 +315,118 @@ export function apply(ctx) {
         },
       }),
     )
+    // ---- v1.1 新增路由 ----
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/intention',
+        handler: async (req, res) => {
+          try {
+            if (req.method !== 'POST') return json(res, { ok: false, error: 'POST only' }, 405)
+            const body = await 读体(req)
+            if (!body || !body.title) return json(res, { ok: false, error: '缺 title' }, 400)
+            const dayKey = 意日键(new Date())
+            const 条 = 加意图(状态, cfg, body, dayKey)
+            // 只把新意图插进今天的空档，不整天重排
+            const 插了 = 排意图(状态, cfg, 状态.dayKey || dayKey, 状态.plan || [])
+            if (插了) {
+              状态.planVersion = (状态.planVersion || 1) + 1
+              状态.planChanges = (状态.planChanges || []).concat({ at: Date.now(), why: 'intention', id: 条.id }).slice(-100)
+            }
+            存状态(状态)
+            记账('新安排：' + 条.title + '（' + 条.status + '）')
+            json(res, { ok: true, intention: 条 })
+          } catch (error) {
+            json(res, { ok: false, error: String(error && error.message) }, 500)
+          }
+        },
+      }),
+    )
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/activity',
+        handler: async (req, res) => {
+          const now = Date.now()
+          const a = 当前项(状态, now)
+          json(res, {
+            ok: true,
+            active: a ? { title: a.title, kind: a.kind, objectId: a.objectId || null, endAt: a.endAt } : null,
+          })
+        },
+      }),
+    )
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/preview',
+        handler: async (req, res) => {
+          json(res, { ok: true, text: 渲染(状态, Date.now(), Number(cfg.injectMaxChars) || 80) })
+        },
+      }),
+    )
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/shareable',
+        handler: async (req, res) => {
+          const c = 可分享阅读(状态, Date.now())
+          json(res, { ok: true, candidate: c })
+        },
+      }),
+    )
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/reserve-share',
+        handler: async (req, res) => {
+          try {
+            const body = await 读体(req)
+            const requestId = String(body.requestId || '')
+            const candidateId = String(body.candidateId || '')
+            if (!requestId || !candidateId) return json(res, { ok: false, error: '缺 requestId/candidateId' }, 400)
+            状态.reservations = (状态.reservations || []).filter((r) => r.expiresAt > Date.now())
+            const 旧 = 状态.reservations.find((r) => r.requestId === requestId)
+            if (旧) return json(res, { ok: true, reservation: 旧, reused: true })
+            const c = 可分享阅读(状态, Date.now())
+            if (!c || c.candidateId !== candidateId) return json(res, { ok: false, error: '候选已失效' }, 409)
+            const 条 = { requestId, candidateId, activityId: c.activityId, objectId: c.objectId, at: Date.now(), expiresAt: Date.now() + 10 * 60000 }
+            状态.reservations.push(条)
+            存状态(状态)
+            json(res, { ok: true, reservation: 条 })
+          } catch (error) {
+            json(res, { ok: false, error: String(error && error.message) }, 500)
+          }
+        },
+      }),
+    )
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/finish-share',
+        handler: async (req, res) => {
+          try {
+            const body = await 读体(req)
+            const requestId = String(body.requestId || '')
+            const 预约 = (状态.reservations || []).find((r) => r.requestId === requestId)
+            if (!预约) return json(res, { ok: false, error: '没有这个预约' }, 404)
+            状态.shares = (状态.shares || []).concat({ activityId: 预约.activityId, objectId: 预约.objectId, at: Date.now() }).slice(-200)
+            状态.reservations = 状态.reservations.filter((r) => r.requestId !== requestId)
+            存状态(状态)
+            记账('分享了：' + 预约.candidateId)
+            json(res, { ok: true })
+          } catch (error) {
+            json(res, { ok: false, error: String(error && error.message) }, 500)
+          }
+        },
+      }),
+    )
+
   } catch (error) {
     记账('注册路由失败：' + String(error && error.message))
   }

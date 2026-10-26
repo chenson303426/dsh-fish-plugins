@@ -136,14 +136,26 @@ function 骰一次性(state, t) {
 }
 
 // 注入文案（≤80 字）：当前活动优先，其次两小时内的相关插曲
+// 读书类活动带上书名和章数；虚构作品要标出来
 export function 渲染(state, now, 上限 = 80) {
   const 当前 = 当前项(state, now)
   const 刚结束 = 当前 ? null : 最近结束(state, now, 120)
   let 主 = ''
+  const 对象表 = state.objects || []
+  const 读书 = (it) => (it && it.objectId ? 对象表.find((o) => o.objectId === it.objectId) : null)
   if (当前) {
-    主 = '正在' + 当前.title + '，预计' + 时(当前.endAt) + '结束'
+    const o = 读书(当前)
+    if (o) {
+      const 总 = (o.chapters && o.chapters.length) || 0
+      const 章号 = Math.min(总 || o.nextPosition + 1, o.nextPosition + 1)
+      const 标 = o.contentMode === 'fictional' ? '（虚构）' : ''
+      主 = '正在看《' + o.title + '》第' + 章号 + '章' + 标 + '，预计' + 时(当前.endAt) + '结束'
+    } else {
+      主 = '正在' + 当前.title + '，预计' + 时(当前.endAt) + '结束'
+    }
   } else if (刚结束) {
-    主 = '刚忙完' + 刚结束.title
+    const o = 读书(刚结束)
+    主 = o ? '刚看完《' + o.title + '》' : '刚忙完' + 刚结束.title
   } else {
     return ''
   }

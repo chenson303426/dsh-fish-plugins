@@ -5,6 +5,7 @@
 // 顺序：睡眠窗口（避让）→ 固定安排 → 空闲槽位填活动
 
 import { createHash } from 'node:crypto'
+import { 排意图 } from './intentions.js'
 
 const 版本 = 1
 
@@ -114,11 +115,15 @@ function 避开睡眠(items, 睡眠段) {
   return 出
 }
 
-export function 生成计划(dayKey, cfg, 睡眠段) {
+export function 生成计划(dayKey, cfg, 睡眠段, 生活状态) {
   const fishId = cfg.fishId || 'fish:default'
   const 主题 = 今日主题(dayKey, fishId)
   let items = 固定安排(dayKey, cfg).filter((it) => it.kind !== 'meal' || true)
   items = 避开睡眠(items, 睡眠段)
+
+  // 她自己的安排：优先于空闲抽活动（局部替换，不占满整晚）
+  let 排了 = 0
+  try { if (生活状态) 排了 = 排意图(生活状态, cfg, dayKey, items) } catch (error) {}
 
   // 空闲填充：把 08:00–22:30 里没被占的缺口切成 60~90 分钟
   const 起 = 时刻(dayKey, '08:00')

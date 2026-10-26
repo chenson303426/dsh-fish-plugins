@@ -68,6 +68,14 @@ window.__ModuleLoader__.load({
         set提示(r && r.ok ? '已保存' : '保存失败')
         setTimeout(() => set提示(''), 3000)
       }
+      const [表单, set表单] = React.useState({ title: '', windowStart: '19:40', windowEnd: '22:30', minutes: 30, contentMode: 'fictional' })
+      const 加安排 = async () => {
+        if (!表单.title.trim()) return set提示('先写书名/做什么')
+        const r = await post('/intention', { ...表单, kind: 'reading', strength: 'decided' })
+        set提示(r && r.ok ? '已加：' + (r.intention ? r.intention.status : '') : '加失败')
+        载入()
+        setTimeout(() => set提示(''), 5000)
+      }
       const 推进 = async () => {
         const r = await post('/advance')
         set提示(r && r.ok ? '推进了：' + (r.preview || '（无活动）') : '推进失败')
@@ -107,6 +115,32 @@ window.__ModuleLoader__.load({
             ? h('div', null, ...(数据.incidents || []).slice(-6).map((x, i) =>
                 h('div', { key: i, style: S.dim }, new Date(x.at).toTimeString().slice(0, 5) + '  ' + x.text)))
             : h('div', { style: S.dim }, '今天还没有插曲'),
+        ),
+
+        h('div', { style: S.h }, '她的安排'),
+        h('div', { style: S.card },
+          (数据.intentions || []).length
+            ? h('div', null, ...(数据.intentions || []).map((x, i) =>
+                h('div', { key: i, style: S.dim }, (x.windowStart || '') + '–' + (x.windowEnd || '') + '  ' + x.title + '  [' + x.status + ']')))
+            : h('div', { style: S.dim }, '还没有她自己排的事'),
+          h('div', { style: { ...S.row, marginTop: 8 } },
+            h('input', { style: { ...S.input, width: 160 }, placeholder: '书名 / 做什么', value: 表单.title, onChange: (e) => set表单({ ...表单, title: e.target.value }) }),
+            h('input', { style: { ...S.input, width: 64 }, value: 表单.windowStart, onChange: (e) => set表单({ ...表单, windowStart: e.target.value }) }),
+            h('span', null, '—'),
+            h('input', { style: { ...S.input, width: 64 }, value: 表单.windowEnd, onChange: (e) => set表单({ ...表单, windowEnd: e.target.value }) }),
+            h('input', { style: { ...S.input, width: 52 }, value: 表单.minutes, onChange: (e) => set表单({ ...表单, minutes: Number(e.target.value) || 30 }) }),
+            h('span', { style: S.dim }, '分钟'),
+            h('label', null, h('input', { type: 'checkbox', checked: 表单.contentMode === 'real', onChange: (e) => set表单({ ...表单, contentMode: e.target.checked ? 'real' : 'fictional' }) }), ' 真实'),
+            h('button', { style: S.btn, onClick: 加安排 }, '加一条'),
+          ),
+        ),
+
+        h('div', { style: S.h }, '读过的书'),
+        h('div', { style: S.card },
+          (数据.objects || []).length
+            ? h('div', null, ...(数据.objects || []).map((o, i) =>
+                h('div', { key: i, style: S.dim }, '《' + o.title + '》 ' + (o.contentMode === 'fictional' ? '虚构 ' : '真实 ') + '读到第 ' + o.nextPosition + ' / ' + (o.chapters || '?') + ' 章' + (o.pendingMaterial ? '（没有正文）' : ''))))
+            : h('div', { style: S.dim }, '还没读过什么'),
         ),
 
         h('div', { style: S.h }, '计划'),
