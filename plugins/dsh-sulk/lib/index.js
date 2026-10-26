@@ -58,6 +58,8 @@ const 默认配置 = {
     },
   },
   dailyCap: 3,
+  useLifeTopic: true,
+  lifeBase: 'http://127.0.0.1:3080',
 }
 
 // ---------- 配置 & 日志 ----------
@@ -138,6 +140,36 @@ function 写观察(o) {
       closedAt: o.closedAt || null,
     })
     appendFileSync(join(家, 'sulk', 'observations.jsonl'), 行 + '\n', 'utf8')
+  } catch (error) {}
+}
+
+// ---- 和 life 的接口（v1.2）：拉一条可分享的阅读/活动 ----
+const 默认lifeBase = 'http://127.0.0.1:3080'
+async function 取生活话题(base) {
+  try {
+    const r = await fetch(String(base || 默认lifeBase) + '/dsh-life/shareable', { signal: AbortSignal.timeout(2500) })
+    const j = await r.json()
+    return j && j.ok && j.candidate ? j.candidate : null
+  } catch (error) {
+    return null
+  }
+}
+async function 预留话题(base, requestId, candidateId) {
+  try {
+    const r = await fetch(String(base || 默认lifeBase) + '/dsh-life/reserve-share', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ requestId, candidateId }), signal: AbortSignal.timeout(2500),
+    })
+    const j = await r.json()
+    return Boolean(j && j.ok)
+  } catch (error) { return false }
+}
+async function 确认话题(base, requestId) {
+  try {
+    await fetch(String(base || 默认lifeBase) + '/dsh-life/finish-share', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ requestId }), signal: AbortSignal.timeout(2500),
+    })
   } catch (error) {}
 }
 
@@ -442,7 +474,20 @@ export function apply(ctx) {
         continue
       }
       if (s.nudges >= 上限) continue
-      const 文案 = String(场.prompt || '')
+      let 文案 = String(场.prompt || '')
+      let 话题 = null
+      let 预留id = ''
+      if (配置.useLifeTopic !== false) {
+        话题 = await 取生活话题(配置.lifeBase)
+        if (话题) {
+          预留id = randomUUID()
+          const 占了 = await 预留话题(配置.lifeBase, 预留id, 话题.candidateId)
+          if (!占了) { 话题 = null; 预留id = '' } else {
+            文案 = '她刚看完《' + (话题.title || '一本书') + '》的一段，心里还有点东西没散，想和你说说：' + String(话题.summary || '').slice(0, 120)
+            记账('用心事话题：' + String(话题.summary || '').slice(0, 40))
+          }
+        }
+      }
       if (!文案) continue
       try {
         写心情({ kind: 'proactive_opportunity', moodDelta: 0, reason: '沉默 ' + Math.round(沉默分) + ' 分钟，她想主动开口（' + s.verdict + '）' })
@@ -465,6 +510,7 @@ export function apply(ctx) {
         s.lastNudgeAt = Date.now()
         s.sendLog.push(Date.now())
         s.nextRollAt = Date.now() + Math.max(间隔, Number(场.afterCooldownMinutes || 30)) * 60000
+        if (预留id) await 确认话题(配置.lifeBase, 预留id)
         记账('已搭话（' + s.verdict + '）：' + 文案)
       } catch (error) {
         记账('followup 失败：' + String((error && error.message) || error))

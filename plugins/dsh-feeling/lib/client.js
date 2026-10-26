@@ -1,4 +1,4 @@
-// DSH「鱼的作息」· 网页半边
+﻿// DSH「鱼的作息」· 网页半边
 // 在设置左侧栏加一项，读写 /dsh-feeling/availability。逻辑全在宿主。
 
 window.__ModuleLoader__.load({

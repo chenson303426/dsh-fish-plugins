@@ -1,4 +1,4 @@
-// dsh-feeling · availability（作息与可用性）
+﻿// dsh-feeling · availability（作息与可用性）
 //
 // 一个模块回答四个问题：
 //   她现在是什么状态（睡 / 午睡 / 小睡 / 清醒）

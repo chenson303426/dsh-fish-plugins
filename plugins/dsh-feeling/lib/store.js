@@ -1,4 +1,4 @@
-// dsh-feeling · 存储层
+﻿// dsh-feeling · 存储层
 // SQLite（node:sqlite，Node 24 / Electron 44 实测可用）
 //
 // 三张表：
