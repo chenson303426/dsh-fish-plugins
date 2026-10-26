@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
 import { openStore, ensureObject, getObject, insertEvent, insertMatter, openMatters, updateObject, updateMatter, updateEventResult, recordSilence, insertExpectation, pendingExpectations, closeExpectation } from './store.js'
-import { renderContext } from './render.js'
+import { renderContext, renderOwnerLine } from './render.js'
 import { loadTime, saveTime, onUser, onReply, renderTime } from './time.js'
 import { 载入 as 载入日记, 保存 as 保存日记, 写入 as 写入日记, 取 as 取日记, 最近 as 最近日记, 解析日期 as 解析日记日期, 是翻日记请求, 渲染 as 渲染日记, 日键 as 日记日键 } from './diary.js'
 import { 默认规则, loadAvailability, saveAvailability, ensureDay, coveredMs, isAsleep, tickSleepLog, renderSleepLog, activityAt } from './availability.js'
@@ -461,6 +461,12 @@ export function apply(ctx) {
                 let 睡 = 0
                 try { 睡 = 参照 ? coveredMs(作息, 作息规则, [我, 他], 参照, now) : 0 } catch (error) {}
                 lines.push(renderTime(时间, now, { ...(cfg.sleep || {}), sleepMs: 睡 }))
+                // 【阿元】他可能在忙/在睡 —— 让她理解，不是抱怨
+                try {
+                  const 状态 = JSON.parse(readFileSync(join(库目录, 'availability-state.json'), 'utf8'))
+                  const 行 = renderOwnerLine(状态)
+                  if (行) lines.push(行)
+                } catch (error) {}
                 const 睡眠行 = renderSleepLog(作息, now)
                 if (作息.lastWakeAt && now - 作息.lastWakeAt < 10 * 60000) {
                   lines.push('【刚睡醒】你刚睡了 ' + (作息.lastWakeMinutes || 0) + ' 分钟，刚醒过来，还有点迷糊。')

@@ -6,7 +6,8 @@
 //   · 只有 status=occurred 的节点才送 mood（moodDelta 固定 0，只发事实）
 //   · 每天最多一次模型调用；失败/超时/空 → 当天关闭机会，不重试
 
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { 种子, 骰 } from './plan.js'
@@ -111,7 +112,7 @@ export function 造提示(state, cfg, now) {
     '请判断今天要不要发生一件“小插曲”，它必须真的改变后续安排，而不是只写一句气氛。',
     '要求：最多 3 个节点、最多 2 个 effect；宁可不提；不要每天都出事。',
     'effect.type 只能是：extend_activity / interrupt_activity / reschedule_activity / replace_future_activity / request_nap。',
-    'request_nap 只有在她的午睡或小睡窗口内才合法，否则不要提。',
+    'request_nap 只有在她的午睡或夜睡窗口内才合法（比如午后小睡、晚上看书看困了直接睡），否则不要提。',
     '示例（不要照抄）：看书看到一半睡着、加班导致晚饭推迟、太累晚上吃了顿好的。',
     '输出严格 JSON：{"chain":{"reason":"一句理由","nodes":[{"at":"21:10","text":"事实描述"}],"effects":[{"type":"extend_activity","params":{"title":"看《X》","minutes":20},"node":0}]}}',
     '如果今天不该有事，输出 {"chain":null}。',
@@ -260,11 +261,53 @@ function 解时间(s, now) {
   return Number.isFinite(t) ? t : 0
 }
 
-export function 在午睡窗口(state, now) {
+// ---- 作息窗口：读「鱼的作息」配置（availability-config.json）----
+
+const 作息配置路径 = () => join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'availability-config.json')
+
+function 转分钟(hhmm) {
+  const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})$/)
+  if (!m) return null
+  const v = Number(m[1]) * 60 + Number(m[2])
+  return Number.isFinite(v) ? v : null
+}
+
+// 读配置里的夜睡 + 午睡（random_nap 不参与）
+export function 读作息窗口() {
+  try {
+    const raw = readFileSync(作息配置路径(), 'utf8')
+    const j = JSON.parse(raw.replace(/^\uFEFF/, ''))
+    const rules = ((j.actors || {})['fish:default'] || {}).rules || []
+    const 窗 = []
+    for (const r of rules) {
+      if (!r || r.enabled === false) continue
+      if (r.kind !== 'sleep' && r.kind !== 'nap') continue
+      const s = 转分钟(r.start)
+      const e = 转分钟(r.end)
+      if (s === null || e === null) continue
+      窗.push({ start: s, end: e, kind: r.kind })
+    }
+    if (窗.length) return 窗
+  } catch (error) {}
+  // 兜底：读不到就用合理默认
+  return [
+    { start: 23 * 60 + 30, end: 8 * 60, kind: 'sleep' },
+    { start: 13 * 60, end: 13 * 60 + 30, kind: 'nap' },
+  ]
+}
+
+// 跨午夜窗口：end <= start 表示跨天
+export function 能否现在睡(now) {
   const d = new Date(now)
   const 分 = d.getHours() * 60 + d.getMinutes()
-  const 窗 = (state.napWindows || [{ start: 13 * 60, end: 13 * 60 + 30 }, { start: 14 * 60 + 30, end: 16 * 60 + 30 }])
-  return 窗.some((w) => 分 >= w.start && 分 <= w.end)
+  return 读作息窗口().some((w) =>
+    w.end > w.start ? 分 >= w.start && 分 <= w.end : 分 >= w.start || 分 <= w.end,
+  )
+}
+
+// 兼容旧名字
+export function 在午睡窗口(state, now) {
+  return 能否现在睡(now)
 }
 
 // 接受：落库，状态 scheduled

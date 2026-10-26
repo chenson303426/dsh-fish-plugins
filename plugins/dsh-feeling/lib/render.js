@@ -90,3 +90,10 @@ export function renderContext(obj, matters, displayName) {
   if (open.length) lines.push(renderMatter(open[0], displayName))
   return lines.join('\n')
 }
+
+// 【阿元】他可能在上班/午睡/深夜 —— 让她理解而不是抱怨
+export function renderOwnerLine(状态) {
+  if (!状态 || 状态.ownerAway !== true) return ''
+  const 词 = { work: '上班时间', sleep: '深夜', nap: '午睡' }[String(状态.ownerKind || '')] || '忙别的事'
+  return '【阿元】现在可能是' + 词 + '，没回你可能只是不在。'
+}
