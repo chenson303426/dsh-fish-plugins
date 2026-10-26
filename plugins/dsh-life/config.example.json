@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "fishId": "fish:default",
+  "targetSession": "<你的会话id>",
+  "inject": true,
+  "injectOrder": 930,
+  "injectMaxChars": 80,
+  "workdays": [1, 2, 3, 4, 5],
+  "workStart": "09:00",
+  "workEnd": "18:00",
+  "meals": ["08:00", "12:00", "19:00"],
+  "advanceStepMinutes": 5,
+  "offlineCollapseHours": 48
+}

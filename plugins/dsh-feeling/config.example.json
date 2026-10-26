@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "fishId": "fish:default",
+  "targetSession": "<你的会话id>",
+  "targetId": "person:qq:<你的QQ号>",
+  "ownerQq": "<你的QQ号>",
+  "displayName": "阿元",
+  "judgeProvider": "",
+  "judgeModel": "",
+  "injectOrder": 910,
+  "maxEventsPerTurn": 2,
+  "eventTtlMinutes": 10,
+  "expectationGraceMinutes": 15,
+  "caps": { "warmth": 3, "trust": 4, "intimacy": 2, "reaction": 15 },
+  "rolling24h": { "warmth": 6, "trust": 8, "intimacy": 4 },
+  "decay": { "angerHours": 6, "hurtHours": 18 },
+  "sleep": { "start": [23, 30], "end": [8, 0] }
+}

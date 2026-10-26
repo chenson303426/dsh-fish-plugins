@@ -1,0 +1,16 @@
+{
+  "enabled": false,
+  "dryRun": true,
+  "targets": ["<你的会话id>"],
+  "fishId": "fish:default",
+  "targetId": "person:qq:<你的QQ号>",
+  "heartbeatSeconds": 60,
+  "dailyCap": 3,
+  "quiet": { "start": 1, "end": 9 },
+  "model": { "provider": "", "model": "" },
+  "scenes": {
+    "ignored": { "minutes": 10, "intervalMinutes": 10, "probability": 0.25, "afterCooldownMinutes": 30, "maxPerEpisode": 2, "prompt": "她十分钟没回我了……有点委屈，想发条消息酸她一句，看她还在不在。" },
+    "wrapped": { "minutes": 30, "intervalMinutes": 30, "probability": 0.1, "afterCooldownMinutes": 90, "maxPerEpisode": 1, "prompt": "她大概忙去了。要不要说句话？不说也行的。" },
+    "idle": { "minutes": 45, "intervalMinutes": 45, "probability": 0.2, "afterCooldownMinutes": 90, "maxPerEpisode": 1, "prompt": "好一会儿没动静了。随便问一句吧，别不理她。" }
+  }
+}

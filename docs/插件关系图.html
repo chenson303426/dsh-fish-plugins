@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>大肥鱼 · 插件关系图</title>
+<style>
+  html,body{margin:0;background:#0d1117;color:#e6edf3;font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1280px;margin:0 auto;padding:24px 20px 60px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:#8b949e;font-size:13px;margin-bottom:18px}
+  .canvas{position:relative;background:#0f151d;border:1px solid #212a36;border-radius:14px;overflow:hidden}
+  svg{position:absolute;inset:0;width:100%;height:100%}
+  .node{position:absolute;border-radius:10px;padding:8px 10px;font-size:12.5px;line-height:1.45;border:1px solid #2a3646;background:#161d27}
+  .node b{display:block;font-size:13px;margin-bottom:2px}
+  .node .d{color:#8b949e;font-size:11.5px}
+  .ext{background:#1b2230;border-color:#31405a}
+  .core{background:#152b22;border-color:#2c5a44}
+  .state{background:#1b2436;border-color:#33436b}
+  .later{background:#241f16;border-color:#5a4a2c;border-style:dashed}
+  .badge{display:inline-block;font-size:10.5px;padding:1px 6px;border-radius:20px;border:1px solid #2a3646;color:#8b949e;margin-left:4px}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin:14px 0 0;color:#8b949e;font-size:12px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+  .notes{margin-top:18px;color:#9aa5b1;font-size:12.5px}
+  .notes code{background:#161d27;border:1px solid #212a36;border-radius:4px;padding:0 4px;color:#c9d1d9}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>大肥鱼 · 插件关系图</h1>
+  <div class="sub">实线 = 已实现；虚线 = 计划中。箭头方向 = 数据流方向。</div>
+
+  <div class="canvas" style="height:980px">
+    <svg viewBox="0 0 1280 980" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#4b6079"/>
+        </marker>
+        <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#7d6a3e"/>
+        </marker>
+        <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#3f7d5c"/>
+        </marker>
+      </defs>
+
+      <!-- 外部链路 -->
+      <path d="M150,72 L232,72" stroke="#4b6079" stroke-width="1.6" marker-end="url(#a)"/>
+      <path d="M392,72 L466,72" stroke="#4b6079" stroke-width="1.6" marker-end="url(#a)"/>
+
+      <!-- 桥接 → 会话 -->
+      <path d="M552,120 L552,196" stroke="#4b6079" stroke-width="1.6" marker-end="url(#a)"/>
+      <!-- 会话 → 各状态 -->
+      <path d="M500,252 L252,318" stroke="#4b6079" stroke-width="1.4" marker-end="url(#a)"/>
+      <path d="M560,252 L560,318" stroke="#4b6079" stroke-width="1.4" marker-end="url(#a)"/>
+      <path d="M640,252 L700,318" stroke="#4b6079" stroke-width="1.4" marker-end="url(#a)"/>
+      <path d="M700,252 L900,318" stroke="#4b6079" stroke-width="1.4" marker-end="url(#a)"/>
+
+      <!-- 状态 → 注入回会话 -->
+      <path d="M300,318 C330,250 430,230 470,222" stroke="#3f7d5c" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#g)"/>
+      <path d="M640,318 C640,270 620,240 600,222" stroke="#3f7d5c" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#g)"/>
+
+      <!-- 总线 -->
+      <path d="M240,408 L240,468" stroke="#4b6079" stroke-width="1.4" marker-end="url(#a)"/>
+      <path d="M560,408 L560,468" stroke="#4b6079" stroke-width="1.4" marker-end="url(#a)"/>
+      <path d="M700,408 L660,468" stroke="#4b6079" stroke-width="1.4" marker-end="url(#a)"/>
+      <path d="M460,548 L460,430" stroke="#3f7d5c" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#g)"/>
+
+      <!-- 作息 → sulk（暂停搭话） -->
+      <path d="M760,350 C840,420 780,520 620,590" stroke="#3f7d5c" stroke-width="1.4" stroke-dasharray="4 4" marker-end="url(#g)"/>
+
+      <!-- sulk → 会话（followup） -->
+      <path d="M360,590 C240,520 300,300 470,232" stroke="#4b6079" stroke-width="1.4" marker-end="url(#a)"/>
+
+      <!-- 未来插件 -->
+      <path d="M220,760 L220,430" stroke="#7d6a3e" stroke-width="1.4" stroke-dasharray="6 5" marker-end="url(#b)"/>
+      <path d="M460,760 L460,560" stroke="#7d6a3e" stroke-width="1.4" stroke-dasharray="6 5" marker-end="url(#b)"/>
+      <path d="M700,760 C700,700 500,700 480,620" stroke="#7d6a3e" stroke-width="1.4" stroke-dasharray="6 5" marker-end="url(#b)"/>
+      <path d="M900,760 C900,700 700,700 640,610" stroke="#7d6a3e" stroke-width="1.4" stroke-dasharray="6 5" marker-end="url(#b)"/>
+    </svg>
+
+    <!-- 外部 -->
+    <div class="node ext" style="left:30px;top:44px;width:120px">
+      <b>QQ 客户端</b><div class="d">你的手机 / 电脑</div>
+    </div>
+    <div class="node ext" style="left:240px;top:44px;width:150px">
+      <b>SnowLuma</b><div class="d">OneBot v11 · 3000/3001</div>
+    </div>
+    <div class="node external" style="left:474px;top:44px;width:150px;background:#1b2230;border:1px solid #31405a;border-radius:10px;padding:8px 10px;position:absolute;font-size:12.5px">
+      <b style="display:block;font-size:13px">dsh-qq 桥接</b><div class="d" style="color:#8b949e;font-size:11.5px">3100 · 拆条 / 审计</div>
+    </div>
+
+    <!-- 宿主框 -->
+    <div style="position:absolute;left:20px;top:140px;width:1240px;height:800px;border:1px dashed #2a3646;border-radius:16px"></div>
+    <div style="position:absolute;left:36px;top:150px;color:#8b949e;font-size:12px">fish profile · DSH 宿主（3080）</div>
+
+    <div class="node core" style="left:470px;top:196px;width:170px">
+      <b>会话 <你的会话id></b><div class="d">closed-agent / L2</div>
+    </div>
+    <div class="node" style="left:700px;top:196px;width:170px">
+      <b>AGENTS.md</b><div class="d">人格 · 她自己会改</div>
+    </div>
+
+    <!-- 状态层 -->
+    <div class="node state" style="left:120px;top:318px;width:230px;height:92px">
+      <b>dsh-mood <span class="badge">新</span></b>
+      <div class="d">心情 0~100 + 七维<br>衰减 / 每轮一行注入<br>POST /dsh-mood/apply</div>
+    </div>
+    <div class="node state" style="left:380px;top:318px;width:230px;height:92px">
+      <b>dsh-feeling</b>
+      <div class="d">感情账本（SQLite）<br>事件 / 事项 / 约定 / 作息<br>含 availability 模块</div>
+    </div>
+    <div class="node state" style="left:640px;top:318px;width:190px;height:92px">
+      <b>availability</b>
+      <div class="d">她的睡 / 你的不在<br>随机小睡 · 并集扣时</div>
+    </div>
+    <div class="node state" style="left:860px;top:318px;width:170px;height:92px">
+      <b>dsh-fish-memory</b>
+      <div class="d">关于你的事<br>会淡忘 · 按会话</div>
+    </div>
+
+    <!-- 总线 -->
+    <div class="node core" style="left:120px;top:468px;width:540px;height:80px">
+      <b>事件总线（计划：SQLite bus）</b>
+      <div class="d">bus_events(seq,id,type,payload) + consumer_offsets + receipts<br>
+      现在：JSONL inbox（mood/inbox.jsonl、sulk/observations.jsonl）</div>
+    </div>
+
+    <!-- 驱动层 -->
+    <div class="node core" style="left:360px;top:576px;width:200px;height:80px">
+      <b>dsh-sulk</b>
+      <div class="d">主动搭话（互斥场景 + 骰子）<br>跨天重置 · 观察写入</div>
+    </div>
+    <div class="node" style="left:860px;top:576px;width:170px;height:60px">
+      <b>dsh-bili-scroll</b>
+      <div class="d">刷 B 站 · 日报同步</div>
+    </div>
+
+    <!-- 未来 -->
+    <div class="node core" style="left:120px;top:700px;width:200px;height:84px">
+      <b>dsh-life</b>
+      <div class="d">懒推进的日常：活动 / 三餐<br>通勤 / 小睡请求</div>
+    </div>
+    <div class="node later" style="left:360px;top:700px;width:200px;height:84px">
+      <b>knowledge <span class="badge">计划</span></b>
+      <div class="d">带出处的知识库（FTS5）<br>检索注入 · 只记不注入先行</div>
+    </div>
+    <div class="node later" style="left:600px;top:700px;width:170px;height:84px">
+      <b>dsh-sticker <span class="badge">计划</span></b>
+      <div class="d">表情包 [[表情:分类]]<br>频率闸</div>
+    </div>
+    <div class="node later" style="left:800px;top:700px;width:170px;height:84px">
+      <b>dsh-temper <span class="badge">计划</span></b>
+      <div class="d">脾气闸门：读 mood+feeling<br>决定帮不帮</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><i style="background:#4b6079"></i>数据 / 消息流</span>
+    <span><i style="background:#3f7d5c"></i>注入 / 抑制 / 状态回写</span>
+    <span><i style="background:#7d6a3e"></i>计划中的线</span>
+  </div>
+
+  <div class="notes">
+    <p><b>三条规矩（和 Codex 定的）：</b></p>
+    <ol>
+      <li><b>life 只发事实，不发分数。</b>它说“14:20 开始打游戏”“被领导训了”，mood 和 feeling 各自评估，<b>不互相拿对方的分数当新证据</b>（否则会正反馈）。</li>
+      <li><b>availability 是唯一写入者。</b>作息区间只由它生成，sulk / mood / life 都来查，不自己算一套。</li>
+      <li><b>消费是 at-least-once。</b>先落库、再推进 offset；重启补消费旧观察，但<b>过期的主动消息绝不补发</b>。</li>
+    </ol>
+    <p>现在实际的连接：<code>sulk 沉默观察 → mood/inbox.jsonl → mood</code>、<code>feeling 事件 → mood/inbox.jsonl → mood</code>，mood 每 3 秒读一次。</p>
+  </div>
+</div>
+</body>
+</html>

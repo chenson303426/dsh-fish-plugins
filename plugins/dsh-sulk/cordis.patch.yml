@@ -1,0 +1,5 @@
+# dsh-sulk —— 宿主半边
+# id 就是日志前缀；改名字要跟 package.json / 这里两处一致
+- insert:
+    - id: sulk
+      name: 'dsh-sulk'

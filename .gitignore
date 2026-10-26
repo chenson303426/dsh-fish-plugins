@@ -1,0 +1,12 @@
+node_modules/
+.venv/
+*.log
+*.db
+*.db-wal
+*.db-shm
+state.json
+*-config.json
+.DSH_HOME/
+.env
+release/
+dist/

@@ -1,0 +1,17 @@
+{
+  "enabled": true,
+  "targetSession": "<你的会话id>",
+  "displayName": "阿元",
+  "moodBase": 70,
+  "moodFloor": 1,
+  "decayHalfHours": 14,
+  "injectMode": "event",
+  "injectConfidence": 55,
+  "injectPerDay": 6,
+  "sigMood": 2,
+  "sigDim": 4,
+  "autoJudge": true,
+  "judgeProvider": "",
+  "judgeModel": "",
+  "naturalInject": true
+}
