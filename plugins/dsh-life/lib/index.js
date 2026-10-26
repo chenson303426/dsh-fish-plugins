@@ -9,9 +9,10 @@ import { join } from 'node:path'
 import { 生成计划, 抽插曲, 日键 } from './plan.js'
 import { 推进, 渲染, 当前项, 当天插曲 } from './advance.js'
 import { 加意图, 排意图, 结算阅读, 可分享阅读, 日键 as 意日键 } from './intentions.js'
+import { 确保机会, 该试, 提候选, 校验链, 接受链, 执行到点, 写节点事实 } from './chains.js'
 
 export const name = 'life'
-export const inject = ['systemPrompt', 'agents', 'timer', 'webServer']
+export const inject = ['systemPrompt', 'agents', 'timer', 'webServer', 'llm']
 
 const 家 = process.env.DSH_HOME || join(homedir(), '.dsh')
 const 配置路径 = join(家, 'life-config.json')
@@ -34,6 +35,14 @@ const 默认配置 = {
   meals: ['08:00', '12:00', '19:00'],
   advanceStepMinutes: 5,
   offlineCollapseHours: 48,
+  chainEnabled: true,
+  chainWindowStart: '09:00',
+  chainWindowEnd: '22:00',
+  chainTimeoutMs: 10000,
+  chainVersion: 1,
+  chainProvider: '',
+  chainModel: '',
+  napWindows: [{ start: 780, end: 810 }, { start: 870, end: 990 }],
 }
 
 function 记账(话) {
@@ -177,6 +186,45 @@ export function apply(ctx) {
     } catch (error) {
       记账('推进失败：' + String(error && error.message))
       return null
+    }
+  }
+
+  let 链锁 = false
+  async function 试链() {
+    if (链锁) return
+    if (cfg.chainEnabled === false) return
+    const now = Date.now()
+    const opp = 该试(状态, cfg, now)
+    if (!opp) return
+    opp.status = 'used'
+    链锁 = true
+    try {
+      let agent = null
+      try {
+        const list = ctx.agents.list() || []
+        agent = list.find((a) => 会话id(a.session) === String(cfg.targetSession)) || list[0] || null
+      } catch (error) {}
+      const r = await 提候选(ctx, cfg, 状态, agent, now)
+      if (!r || !r.chain) {
+        opp.reason = (r && r.error) || '模型没提'
+        记账('链：今天不提（' + opp.reason + '）')
+        存状态(状态)
+        return
+      }
+      记账('链候选：' + (r.chain.nodes || []).length + ' 节点 / ' + (r.chain.effects || []).length + ' 后果')
+      const v = 校验链(r.chain, 状态, cfg, now)
+      if (!v.ok) {
+        记账('链拒绝：' + v.errors.join('；'))
+        存状态(状态)
+        return
+      }
+      const c = 接受链(状态, r.chain, v, now, 状态.dayKey || 日键(new Date(now)))
+      记账('链接受：' + (c.reason || '（无理由）') + '｜' + c.effects.map((e) => e.type).join(', '))
+      存状态(状态)
+    } catch (error) {
+      记账('链异常：' + String(error && error.message))
+    } finally {
+      链锁 = false
     }
   }
 
@@ -453,6 +501,16 @@ export function apply(ctx) {
       }),
     )
 
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/chains',
+        handler: async (req, res) => {
+          json(res, { ok: true, chains: (状态.chains || []).slice(-10), opportunity: 状态.chainOpportunity || null })
+        },
+      }),
+    )
+
   } catch (error) {
     记账('注册路由失败：' + String(error && error.message))
   }
@@ -467,6 +525,8 @@ export function apply(ctx) {
     mounted.clear()
   })
 
+  状态.chains = 状态.chains || []
+  状态.chainOpportunity = 状态.chainOpportunity || null
   必要时重排()
   状态.lastAdvanceAt = 状态.lastAdvanceAt || Date.now()
   tick()
