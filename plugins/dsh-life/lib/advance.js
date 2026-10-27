@@ -204,3 +204,24 @@ export function 渲染(state, now, 上限 = 80) {
   if (句.length > 上限) 句 = 句.slice(0, 上限 - 1) + '。'
   return '【日常】' + 句
 }
+
+// 今天的流水：一行，≤120 字，最多 6 段（给"你今天干嘛了"用）
+export function 渲染流水(state) {
+  const 日志 = (state.dayLog || []).slice().sort((a, b) => Number(a.at) - Number(b.at))
+  if (!日志.length) return ''
+  const 段 = []
+  for (const x of 日志) {
+    if (x.kind === 'incident') {
+      段.push(时(x.at) + ' ' + x.title)
+    } else if (x.status === 'skipped') {
+      continue
+    } else {
+      段.push(时(x.startAt) + '-' + 时(x.endAt) + ' ' + x.title)
+    }
+    if (段.length >= 6) break
+  }
+  if (!段.length) return ''
+  let 行 = '【今天的流水】' + 段.join('｜')
+  if (行.length > 120) 行 = 行.slice(0, 119) + '…'
+  return 行
+}

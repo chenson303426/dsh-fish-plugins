@@ -6,8 +6,8 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { 生成计划, 抽插曲, 日键 } from './plan.js'
-import { 推进, 渲染, 当前项, 当天插曲 } from './advance.js'
+import { 生成计划, 抽插曲, 日键, 候选池 } from './plan.js'
+import { 推进, 渲染, 当前项, 当天插曲, 渲染流水 } from './advance.js'
 import { 加意图, 排意图, 结算阅读, 可分享阅读, 日键 as 意日键 } from './intentions.js'
 import { 确保机会, 该试, 提候选, 校验链, 接受链, 执行到点, 写节点事实, 能否现在睡 } from './chains.js'
 import { 候选模板, 按模板建链 } from './templates.js'
@@ -34,6 +34,8 @@ const 默认配置 = {
   workStart: '09:00',
   workEnd: '18:00',
   meals: ['08:00', '12:00', '19:00'],
+  useDesire: true,
+  desireBase: 'http://127.0.0.1:3080',
   advanceStepMinutes: 5,
   offlineCollapseHours: 48,
   chainEnabled: true,
@@ -80,7 +82,7 @@ function 读状态() {
   try {
     return JSON.parse(readFileSync(状态路径, 'utf8'))
   } catch (error) {
-    return { dayKey: '', plan: [], incidents: [], needs: { energy: 70, fullness: 70, social: 60 }, lastAdvanceAt: 0, active: null, intentions: [], objects: [], readings: [], shares: [], reservations: [], planVersion: 1, planChanges: [] }
+    return { dayKey: '', plan: [], incidents: [], needs: { energy: 70, fullness: 70, social: 60 }, lastAdvanceAt: 0, active: null, intentions: [], objects: [], readings: [], shares: [], reservations: [], planVersion: 1, planChanges: [], dayLog: [] }
   }
 }
 
@@ -124,16 +126,79 @@ export function apply(ctx) {
   let 状态 = 读状态()
   const mounted = new Map()
 
+  // ---- 和欲望插件的接口（失败静默，不影响排程） ----
+  const 欲望缓存 = { dayKey: '', tried: false, scores: null, pending: false }
+  async function 预取欲望评分(dayKey) {
+    if (cfg.useDesire === false) return
+    欲望缓存.pending = true
+    try {
+      const cands = 候选池(dayKey, cfg)
+      const r = await fetch(String(cfg.desireBase || 'http://127.0.0.1:3080') + '/dsh-desire/score', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ fishId: cfg.fishId || 'fish:default', at: Date.now(), candidates: cands }),
+        signal: AbortSignal.timeout(2500),
+      })
+      const j = await r.json()
+      const 分 = {}
+      for (const x of (j && j.scores) || []) {
+        const 名 = x.title || x.candidate || ''
+        if (!名) continue
+        const needFit = Number(x.needFit) || 0
+        const goalFit = Number(x.goalFit) || 0
+        分[名] = { score: 0.6 * needFit + 0.4 * goalFit, reasonIds: x.reasonIds || [] }
+      }
+      欲望缓存.scores = Object.keys(分).length ? 分 : null
+      记账('欲望评分：' + Object.keys(分).length + ' 个候选')
+    } catch (error) {
+      欲望缓存.scores = null
+      记欲望失败(String(error && error.message))
+    } finally {
+      欲望缓存.pending = false
+    }
+  }
+  let 欲望失败日志_时 = 0
+  function 记欲望失败(msg) {
+    if (Date.now() - 欲望失败日志_时 < 5 * 60000) return
+    欲望失败日志_时 = Date.now()
+    记账('欲望接口失败：' + msg)
+  }
+  async function 上报欲望(路径, body) {
+    try {
+      await fetch(String(cfg.desireBase || 'http://127.0.0.1:3080') + 路径, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(2500),
+      })
+    } catch (error) {
+      记欲望失败(String(error && error.message))
+    }
+  }
+
   function 必要时重排() {
     const dayKey = 日键(new Date())
     if (状态.dayKey === dayKey && Array.isArray(状态.plan) && 状态.plan.length) return false
-    const { theme, items } = 生成计划(dayKey, cfg, 读睡眠段(dayKey), 状态)
+    // 欲望评分：每天先试一次（最多等一个 tick）；失败就退回原来的随机
+    if (欲望缓存.pending) return false
+    if (cfg.useDesire !== false && 欲望缓存.dayKey !== dayKey && !欲望缓存.tried) {
+      欲望缓存.dayKey = dayKey
+      欲望缓存.tried = true
+      void 预取欲望评分(dayKey)
+      return false
+    }
+    const { theme, items } = 生成计划(dayKey, cfg, 读睡眠段(dayKey), 状态, 欲望缓存.scores ? { scores: 欲望缓存.scores } : null)
     状态.dayKey = dayKey
     状态.plan = items
     状态.incidents = (状态.incidents || []).filter((x) => x.dayKey === dayKey)
     状态.active = null
+    状态.dayLog = []
     状态.needs = 状态.needs || { energy: 70, fullness: 70, social: 60 }
     记账('今天排好了：主题=' + theme + '，' + items.length + ' 段')
+    // 有关联欲求的活动上报一次
+    for (const it of items) {
+      if (it.desireId) void 上报欲望('/dsh-desire/link-plan', { desireId: it.desireId, planId: it.id, expectedOutcome: it.title })
+    }
     return true
   }
 
@@ -143,6 +208,12 @@ export function apply(ctx) {
     for (const it of 所有) {
       if (!['completed', 'interrupted', 'skipped'].includes(it.status)) continue
       if (it.settled) continue
+      // 回填欲望（结果未知按 skipped，不阻塞）
+      void 上报欲望('/dsh-desire/outcome', {
+        eventId: it.id,
+        activityId: it.id,
+        result: it.status === 'completed' ? 'completed' : it.status === 'interrupted' ? 'interrupted' : 'skipped',
+      })
       if (!it.objectId) { it.settled = true; continue }
       const 计划分 = Number(it.plannedMinutes) || Math.max(1, (it.endAt - it.startAt) / 60000)
       const 实跑分 = Number(it.ranMinutes) || 0
@@ -160,6 +231,31 @@ export function apply(ctx) {
       }
     }
     if (状态.archive) 状态.archive = 状态.archive.slice(-50)
+  }
+
+  function 记录流水(events) {
+    if (!Array.isArray(状态.dayLog)) 状态.dayLog = []
+    for (const e of events) {
+      if (!e || !e.type) continue
+      if (e.type === 'started') {
+        const id = String(e.item.id || e.item.title + '@' + e.item.startAt)
+        if (!状态.dayLog.some((x) => x.id === id)) {
+          状态.dayLog.push({ id, at: e.item.startAt, kind: e.item.kind, title: e.item.title, startAt: e.item.startAt, endAt: e.item.endAt, status: 'running' })
+        }
+      } else if (e.type === 'ended') {
+        const id = String(e.item.id || e.item.title + '@' + e.item.startAt)
+        const 条 = { id, at: e.item.startAt, kind: e.item.kind, title: e.item.title, startAt: e.item.startAt, endAt: e.item.endAt, status: e.status || e.item.status || 'ended' }
+        const 现有 = 状态.dayLog.find((x) => x.id === id)
+        if (现有) Object.assign(现有, 条)
+        else 状态.dayLog.push(条)
+      } else if (e.type === 'incident') {
+        const id = 'inc:' + e.at + ':' + String(e.text || '').slice(0, 10)
+        if (!状态.dayLog.some((x) => x.id === id)) {
+          状态.dayLog.push({ id, at: e.at, kind: 'incident', title: String(e.text || ''), startAt: e.at, endAt: e.at, status: 'occurred' })
+        }
+      }
+    }
+    状态.dayLog = 状态.dayLog.slice(-40)
   }
 
   const 上次结束 = new Map()
@@ -180,6 +276,7 @@ export function apply(ctx) {
           if (e.type === 'incident') 记账('插曲：' + e.text)
         }
       }
+      记录流水(结果.events || [])
       if (结果.collapsed) 记账('离线太久，已经折叠（只排当前状态）')
       结算已结束(now)
       存状态(状态)
@@ -285,8 +382,37 @@ export function apply(ctx) {
     } catch (error) {}
   }
 
+  // 用户在问"今天/刚才干了什么"吗？（只匹配"做事"类问法，"今天天气不错"不触发）
+  const 流水问法 = /(干嘛|干了什么|干了啥|做了什么|做了啥|忙什么|忙啥|过得怎么样|怎么过的|做什么了|干什么了)/
+  function 取文本(消息) {
+    try {
+      const c = 消息 && 消息.content
+      if (typeof c === 'string') return c.trim()
+      if (!Array.isArray(c)) return ''
+      return c.filter((x) => x && x.type === 'text').map((x) => x.text || '').join('').trim()
+    } catch (error) {
+      return ''
+    }
+  }
+
   function 挂到(agent, sid) {
     const offs = []
+    let 要流水 = ''
+    try {
+      offs.push(
+        agent.ctx.on('agent/inbox/inserted', (payload) => {
+          const msg = payload && payload.message ? payload.message : payload
+          const src = msg && msg.source && msg.source.kind ? String(msg.source.kind) : ''
+          if (['sulk', 'feeling', 'mood', 'life', 'speak-up'].includes(src)) return
+          const txt = 取文本(msg)
+          if (!txt) return
+          const m = txt.match(流水问法)
+          if (m) 要流水 = m[0]
+        }),
+      )
+    } catch (error) {
+      记账('监听 inbox 失败：' + String(error && error.message))
+    }
     try {
       offs.push(
         agent.ctx.systemPrompt.context({
@@ -300,6 +426,16 @@ export function apply(ctx) {
               if (行 && Date.now() - (globalThis.__life_注入日志 || 0) > 5 * 60000) {
                 globalThis.__life_注入日志 = Date.now()
                 记账('注入：' + 行)
+              }
+              // 这一轮在问"今天干了什么" → 追加今天的流水（只说一次）
+              if (要流水) {
+                const 词 = 要流水
+                要流水 = ''
+                const 流水 = 渲染流水(状态)
+                if (流水) {
+                  记账('流水注入：' + 词)
+                  return (行 ? 行 + '\n' : '') + 流水
+                }
               }
               return 行
             } catch (error) {
@@ -373,6 +509,27 @@ export function apply(ctx) {
                 materialKind: o.materialKind, nextPosition: o.nextPosition,
                 chapters: (o.chapters || []).length, pendingMaterial: Boolean(o.pendingMaterial),
               })),
+            })
+          } catch (error) {
+            json(res, { ok: false, error: String(error && error.message) }, 500)
+          }
+        },
+      }),
+    )
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/day',
+        handler: async (req, res) => {
+          try {
+            const 日志 = (状态.dayLog || []).slice().sort((a, b) => Number(a.at) - Number(b.at))
+            json(res, {
+              ok: true,
+              dayKey: 状态.dayKey,
+              count: 日志.length,
+              log: 日志,
+              line: 渲染流水(状态),
             })
           } catch (error) {
             json(res, { ok: false, error: String(error && error.message) }, 500)

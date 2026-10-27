@@ -202,10 +202,20 @@ function 缺口们(items, 起, 止) {
 
 // ---------- 选活动 ----------
 
-function 选活动(dayKey, fishId, slotId, theme, 冷却, 已用) {
+function 选活动(dayKey, fishId, slotId, theme, 冷却, 已用, 欲望) {
   const r = 骰(种子(fishId, dayKey, slotId, 版本, 'activity'))
   const 候选 = 池_工作日.filter((a) => 可用(a.title, 冷却) && !(已用 && 已用.has(a.title)))
   const 表 = 候选.length ? 候选 : [最久没做(池_工作日, 冷却)]
+  // 欲望排序微调：只改排序，不去重、不覆盖冷却
+  if (欲望 && 欲望.scores) {
+    let 最好 = null
+    for (const a of 表) {
+      const sc = 欲望.scores[a.title]
+      if (!sc || typeof sc.score !== 'number') continue
+      if (!最好 || sc.score > 最好.score) 最好 = { a, score: sc.score, sc }
+    }
+    if (最好) return { ...最好.a, desireId: (最好.sc.reasonIds || [])[0] || null }
+  }
   const 权重 = 表.map((a) => 1 + (a.theme[theme] || 0) * 1.5)
   const 总 = 权重.reduce((a, b) => a + b, 0)
   let x = r() * 总
@@ -216,14 +226,24 @@ function 选活动(dayKey, fishId, slotId, theme, 冷却, 已用) {
   return 表[表.length - 1]
 }
 
-function 选周末活动(dayKey, fishId, slotId, 类别, 冷却, 已用) {
+function 选周末活动(dayKey, fishId, slotId, 类别, 冷却, 已用, 欲望) {
   const 全 = 周末池[类别] || 周末池.宅家
   let 表 = 全.filter((t) => 可用(t, 冷却) && !(已用 && 已用.has(t)))
   if (!表.length) 表 = 全.filter((t) => !(已用 && 已用.has(t)))
   if (!表.length) 表 = 全
   const 用 = 表.length ? 表 : [最久没做(全.map((title) => ({ title })), 冷却).title]
+  // 欲望排序微调
+  if (欲望 && 欲望.scores) {
+    let 最好 = null
+    for (const 名 of 用) {
+      const sc = 欲望.scores[名]
+      if (!sc || typeof sc.score !== 'number') continue
+      if (!最好 || sc.score > 最好.score) 最好 = { 名, score: sc.score, sc }
+    }
+    if (最好) return { title: 最好.名, desireId: (最好.sc.reasonIds || [])[0] || null }
+  }
   const r = 骰(种子(fishId, dayKey, slotId, 版本, 'weekend'))
-  return 用[Math.floor(r() * 用.length)]
+  return { title: 用[Math.floor(r() * 用.length)], desireId: null }
 }
 
 function 选类别(dayKey, fishId) {
@@ -237,7 +257,7 @@ function 选类别(dayKey, fishId) {
 
 // ---------- 生成 ----------
 
-export function 生成计划(dayKey, cfg, 睡眠段, 生活状态) {
+export function 生成计划(dayKey, cfg, 睡眠段, 生活状态, 欲望) {
   const fishId = cfg.fishId || 'fish:default'
   const 主题 = 今日主题(dayKey, fishId)
   const 类型 = 日类型(dayKey, cfg)
@@ -260,9 +280,9 @@ export function 生成计划(dayKey, cfg, 睡眠段, 生活状态) {
     const 主起 = 时刻(dayKey, '13:30')
     const 主止 = 主起 + 主长
     if (!items.some((it) => it.startAt < 主止 && it.endAt > 主起)) {
-      const 标题 = 选周末活动(dayKey, fishId, 'main', 类, 冷却, 今日已用)
-      今日已用.add(标题)
-      items.push({ id: dayKey + ':main', slotId: 'main', kind: 'activity', title: 标题, category: 类, startAt: 主起, endAt: 主止 })
+      const 选 = 选周末活动(dayKey, fishId, 'main', 类, 冷却, 今日已用, 欲望)
+      今日已用.add(选.title)
+      items.push({ id: dayKey + ':main', slotId: 'main', kind: 'activity', title: 选.title, category: 类, startAt: 主起, endAt: 主止, desireId: 选.desireId || null })
     }
     // 小活动：一到两个 20~60 分钟，填剩余空隙
     const 小槽 = 缺口们(items.sort((a, b) => a.startAt - b.startAt), 时刻(dayKey, '08:00'), 时刻(dayKey, '22:30'))
@@ -274,9 +294,9 @@ export function 生成计划(dayKey, cfg, 睡眠段, 生活状态) {
       const 长 = (20 + Math.floor(r2() * 41)) * 60000
       if (b - a < 长) continue
       const 类2 = 类 === '半日出行' ? '宅家' : 选类别(dayKey, fishId)
-      const 标题 = 选周末活动(dayKey, fishId, 'small' + 放, 类2, 冷却, 今日已用)
-      今日已用.add(标题)
-      items.push({ id: dayKey + ':small' + 放, slotId: 'small' + 放, kind: 'activity', title: 标题, category: 类2, startAt: a, endAt: a + 长 })
+      const 选小 = 选周末活动(dayKey, fishId, 'small' + 放, 类2, 冷却, 今日已用, 欲望)
+      今日已用.add(选小.title)
+      items.push({ id: dayKey + ':small' + 放, slotId: 'small' + 放, kind: 'activity', title: 选小.title, category: 类2, startAt: a, endAt: a + 长, desireId: 选小.desireId || null })
       放++
     }
   } else {
@@ -291,14 +311,14 @@ export function 生成计划(dayKey, cfg, 睡眠段, 生活状态) {
         const r = 骰(种子(fishId, dayKey, slotId, 版本, 'len'))
         const 长 = (60 + Math.floor(r() * 31)) * 60000
         const 结束 = Math.min(b, t + 长)
-        let 活动 = 选活动(dayKey, fishId, slotId, 主题, 冷却, 今日已用)
+        let 活动 = 选活动(dayKey, fishId, slotId, 主题, 冷却, 今日已用, 欲望)
         if (活动.title === lastTitle) {
           const 下一个 = 池_工作日[(池_工作日.findIndex((x) => x.id === 活动.id) + 1) % 池_工作日.length]
           活动 = 下一个
         }
         lastTitle = 活动.title
         今日已用.add(活动.title)
-        items.push({ id: dayKey + ':' + slotId, slotId, kind: 'activity', title: 活动.title, startAt: t, endAt: 结束 })
+        items.push({ id: dayKey + ':' + slotId, slotId, kind: 'activity', title: 活动.title, startAt: t, endAt: 结束, desireId: 活动.desireId || null })
         t = 结束
       }
     }
@@ -331,4 +351,15 @@ export function 抽插曲(kind, dayKey, fishId, slotId, n) {
   const 表 = kind === 'work' ? 工作插曲 : kind === 'accident' ? 意外插曲 : 休闲插曲
   const r = 骰(种子(fishId, dayKey, slotId, 版本, 'incident' + n))
   return 表[Math.floor(r() * 表.length)]
+}
+
+// 给欲望评分用的候选池（当天会出现的所有可能活动）
+export function 候选池(dayKey, cfg) {
+  const 类型 = 日类型(dayKey, cfg)
+  if (类型 === 'restday') {
+    const 全部 = []
+    for (const [类, 表] of Object.entries(周末池)) for (const title of 表) 全部.push({ title, kind: 'activity', category: 类 })
+    return 全部
+  }
+  return 池_工作日.map((a) => ({ title: a.title, kind: 'activity' }))
 }
