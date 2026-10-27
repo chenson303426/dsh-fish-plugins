@@ -11,6 +11,8 @@ import { 推进, 渲染, 当前项, 当天插曲, 渲染流水 } from './advance
 import { 加意图, 排意图, 结算阅读, 可分享阅读, 日键 as 意日键 } from './intentions.js'
 import { 确保机会, 该试, 提候选, 校验链, 接受链, 执行到点, 写节点事实, 能否现在睡 } from './chains.js'
 import { 候选模板, 按模板建链 } from './templates.js'
+import { 默认条件配置, 刷新天气, 生效条件, 评估活动, 设置条件, 跨天结转, 写心情 } from './conditions.js'
+import { 编辑计划 } from './planedit.js'
 
 export const name = 'life'
 export const inject = ['systemPrompt', 'agents', 'timer', 'webServer', 'llm']
@@ -46,6 +48,7 @@ const 默认配置 = {
   chainProvider: '',
   chainModel: '',
   napWindows: [{ start: 780, end: 810 }, { start: 870, end: 990 }],
+  ...默认条件配置,
 }
 
 function 记账(话) {
@@ -82,7 +85,7 @@ function 读状态() {
   try {
     return JSON.parse(readFileSync(状态路径, 'utf8'))
   } catch (error) {
-    return { dayKey: '', plan: [], incidents: [], needs: { energy: 70, fullness: 70, social: 60 }, lastAdvanceAt: 0, active: null, intentions: [], objects: [], readings: [], shares: [], reservations: [], planVersion: 1, planChanges: [], dayLog: [] }
+    return { dayKey: '', plan: [], incidents: [], needs: { energy: 70, fullness: 70, social: 60 }, lastAdvanceAt: 0, active: null, intentions: [], objects: [], readings: [], shares: [], reservations: [], planVersion: 1, planChanges: [], dayLog: [], conditions: [], weather: null, planEditResults: {}, carriedDays: [], moodSent: [] }
   }
 }
 
@@ -351,7 +354,22 @@ export function apply(ctx) {
     }
   }
 
+  let 上次条件维护 = 0
+  async function 条件维护() {
+    if (Date.now() - 上次条件维护 < 10 * 60000) return
+    上次条件维护 = Date.now()
+    try {
+      await 刷新天气(状态, cfg)
+      const 结转 = 跨天结转(状态, Date.now())
+      if (结转 && 结转.carried) 记账('跨天结转：' + 结转.carried + ' 条身体条件')
+      存状态(状态)
+    } catch (error) {
+      记账('条件维护失败：' + String(error && error.message))
+    }
+  }
+
   function tick() {
+    void 条件维护()
     try {
       cfg = 读配置()
       if (!cfg.enabled) return
@@ -690,6 +708,93 @@ export function apply(ctx) {
         path: '/dsh-life/chains',
         handler: async (req, res) => {
           json(res, { ok: true, chains: (状态.chains || []).slice(-10), opportunity: 状态.chainOpportunity || null })
+        },
+      }),
+    )
+
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/plan/edit',
+        handler: async (req, res) => {
+          try {
+            const b = await 读体(req)
+            const r = 编辑计划(状态, b, Date.now(), 读睡眠段(状态.dayKey))
+            if (r.ok) {
+              存状态(状态)
+              记账('改计划：' + r.op + (b.reason ? '（' + String(b.reason).slice(0, 40) + '）' : ''))
+              if (b.cause === 'condition') {
+                写心情(家, 状态, { kind: 'plan_change', reason: '计划因条件变了：' + String(b.reason || r.op), correlationId: 'plan:' + (b.requestId || r.op) })
+              }
+            }
+            json(res, r, r.ok ? 200 : 409)
+          } catch (error) {
+            json(res, { ok: false, error: String(error && error.message) }, 500)
+          }
+        },
+      }),
+    )
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/conditions',
+        handler: async (req, res) => {
+          try {
+            if (req.method === 'POST') {
+              const b = await 读体(req)
+              const r = 设置条件(状态, b, Date.now())
+              if (r.ok && !r.removed && b.type === 'illness') {
+                写心情(家, 状态, { kind: 'condition', reason: '身体不太舒服（' + (b.severity || 'moderate') + '）', correlationId: 'illness:' + r.condition.id + ':' + r.condition.validFrom })
+              }
+              存状态(状态)
+              记账('设置条件：' + (r.removed ? '解除 ' + r.id : r.condition.type + '/' + r.condition.severity))
+              json(res, { ok: true, ...r, active: 生效条件(状态, cfg, Date.now()) })
+            } else {
+              json(res, { ok: true, active: 生效条件(状态, cfg, Date.now()), weather: 状态.weather || null })
+            }
+          } catch (error) {
+            json(res, { ok: false, error: String(error && error.message) }, 500)
+          }
+        },
+      }),
+    )
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/evaluate',
+        handler: async (req, res) => {
+          try {
+            const b = await 读体(req)
+            const 活动 = b.activity || {}
+            const 结果 = 评估活动(状态, cfg, 活动, Date.now())
+            json(res, { ok: true, ...结果 })
+          } catch (error) {
+            json(res, { ok: false, error: String(error && error.message) }, 500)
+          }
+        },
+      }),
+    )
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/can-social',
+        handler: async (req, res) => {
+          try {
+            const 结果 = 评估活动(状态, cfg, { title: '社交活动', kind: 'social', outdoor: false }, Date.now())
+            const 身体 = (生效条件(状态, cfg, Date.now()) || []).filter((c) => c.category === 'body' && c.status === 'active')
+            json(res, {
+              ok: true,
+              allowed: 结果.decision !== 'blocked' && 身体.length === 0,
+              decision: 结果.decision,
+              reasons: [...结果.reasons, ...身体.map((c) => ({ conditionId: c.id, category: 'body', effect: c.constraints && c.constraints.effect, severity: c.severity, basis: c.basis }))],
+            })
+          } catch (error) {
+            json(res, { ok: false, error: String(error && error.message) }, 500)
+          }
         },
       }),
     )
