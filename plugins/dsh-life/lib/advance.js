@@ -206,20 +206,24 @@ export function 渲染(state, now, 上限 = 80) {
 }
 
 // 今天的流水：一行，≤120 字，最多 6 段（给"你今天干嘛了"用）
-export function 渲染流水(state) {
+export function 渲染流水(state, now = Date.now()) {
   const 日志 = (state.dayLog || []).slice().sort((a, b) => Number(a.at) - Number(b.at))
   if (!日志.length) return ''
   const 段 = []
   for (const x of 日志) {
     if (x.kind === 'incident') {
+      if (Number(x.at) > now) continue // 还没发生的插曲不算"做过"
       段.push(时(x.at) + ' ' + x.title)
     } else if (x.status === 'skipped') {
       continue
     } else {
-      段.push(时(x.startAt) + '-' + 时(x.endAt) + ' ' + x.title)
+      // 只算已经结束的活动：endAt 在未来的，那只是计划，还没发生
+      const 止 = Number(x.endAt)
+      if (!止 || 止 > now) continue
+      段.push(时(x.startAt) + '-' + 时(止) + ' ' + x.title)
     }
-    if (段.length >= 6) break
   }
+  if (段.length > 6) 段.splice(0, 段.length - 6) // 只留最近 6 段
   if (!段.length) return ''
   let 行 = '【今天的流水】' + 段.join('｜')
   if (行.length > 120) 行 = 行.slice(0, 119) + '…'

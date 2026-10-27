@@ -431,7 +431,7 @@ export function apply(ctx) {
               if (要流水) {
                 const 词 = 要流水
                 要流水 = ''
-                const 流水 = 渲染流水(状态)
+                const 流水 = 渲染流水(状态, Date.now())
                 if (流水) {
                   记账('流水注入：' + 词)
                   return (行 ? 行 + '\n' : '') + 流水
@@ -529,7 +529,7 @@ export function apply(ctx) {
               dayKey: 状态.dayKey,
               count: 日志.length,
               log: 日志,
-              line: 渲染流水(状态),
+              line: 渲染流水(状态, Date.now()),
             })
           } catch (error) {
             json(res, { ok: false, error: String(error && error.message) }, 500)
