@@ -1,8 +1,8 @@
-// dsh-desire · 宿主半边
+﻿// dsh-desire · 宿主半边
 //
 // 欲望 v1：七维需要 + 具体欲求。只影响活动选择与欲求形成，不直接改 mood / feeling。
-// 数据：C:\Users\范楷元\.dsh\desire\state.json
-// 配置：C:\Users\范楷元\.dsh\desire-config.json
+// 数据：<你的DSH目录>\desire\state.json
+// 配置：<你的DSH目录>\desire-config.json
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from 'node:fs'
 import { homedir } from 'node:os'
