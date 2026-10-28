@@ -54,12 +54,15 @@ window.__ModuleLoader__.load({
       const [数据, set数据] = React.useState(null)
       const [配置, set配置] = React.useState(null)
       const [提示, set提示] = React.useState('')
+      const [天气, set天气] = React.useState(null)
 
       const 载入 = async () => {
         const s = await get('/state')
         const c = await get('/config')
         if (s && s.ok) set数据(s)
         if (c && c.ok) set配置(c.config)
+        const w = await get('/weather')
+        if (w && w.ok) set天气(w)
       }
       React.useEffect(() => { 载入() }, [])
 
@@ -83,7 +86,35 @@ window.__ModuleLoader__.load({
         setTimeout(() => set提示(''), 6000)
       }
 
-      if (!数据 || !配置) return h('div', { style: S.wrap }, '读取中…')
+      const 存天气 = async (next) => {
+        const r = await post('/weather', next || 天气.config)
+        if (r && r.ok) { set天气({ ...天气, config: r.weather, preview: r.preview }); set提示('天气已保存') } else { set提示('天气保存失败') }
+        setTimeout(() => set提示(''), 4000)
+      }
+      const 换世界 = async () => {
+        if (!window.confirm('换一个世界会重生成之后的天气，已过去的时段不变。确定？')) return
+        const r = await post('/weather/regenerate', { confirm: true })
+        if (r && r.ok) { set提示('换好了'); 载入() } else set提示(r && r.error ? r.error : '换世界失败')
+        setTimeout(() => set提示(''), 4000)
+      }
+      const 改权重 = (k, v) => {
+        const w = { ...(天气.config.weights || {}), [k]: Math.max(0, Number(v) || 0) }
+        set天气({ ...天气, config: { ...天气.config, weights: w } })
+      }
+      const 改风 = (k, v) => {
+        const w = { ...(天气.config.windWeights || {}), [k]: Math.max(0, Number(v) || 0) }
+        set天气({ ...天气, config: { ...天气.config, windWeights: w } })
+      }
+      const 改字段 = (k, v) => set天气({ ...天气, config: { ...天气.config, [k]: v } })
+
+      if (!数据 || !配置 || !天气) return h('div', { style: S.wrap }, '读取中…')
+      const 天 = 天气.current || {}
+      const 权重 = 天气.config.weights || {}
+      const 风权重 = 天气.config.windWeights || {}
+      const 权总 = Object.values(权重).reduce((a, x) => a + Math.max(0, Number(x) || 0), 0) || 1
+      const 风总 = Object.values(风权重).reduce((a, x) => a + Math.max(0, Number(x) || 0), 0) || 1
+      const 名 = { clear:'晴', cloudy:'多云', overcast:'阴', drizzle:'小雨', rain:'大雨', storm:'雷暴', snow:'雪', fog:'雾' }
+      const 风名 = { breeze:'微风', moderate:'和风', strong:'强风', gale:'大风' }
       const 在 = 数据.active
       const 需 = 数据.needs || {}
 
@@ -147,6 +178,64 @@ window.__ModuleLoader__.load({
         h('div', { style: S.card },
           h('div', { style: S.dim }, ...(数据.plan || []).slice(0, 12).map((it, i) =>
             h('div', { key: i }, it.start + '–' + it.end + '  ' + it.title))),
+        ),
+
+        h('div', { style: S.h }, '天气'),
+        h('div', { style: S.card },
+          h('div', null, '现在：' + (天.name || '—') + '  ' + (天.temp ?? '—') + '℃  ' + (天.windName || '')),
+          h('div', { style: S.dim }, '这是模拟世界的天气，不是真实气象。' + (天气.preview ? ' 一年约 ' + 天气.preview : '')),
+          h('div', { style: { ...S.row, marginTop: 8 } },
+            h('span', { style: { width: 64, opacity: .7 } }, '预设'),
+            h('select', {
+              style: { ...S.input, width: 120 },
+              value: 天气.config.preset || '自定义',
+              onChange: (e) => 存天气({ preset: e.target.value }),
+            }, ...['自定义', ...(天气.presets || [])].map((x) => h('option', { key: x, value: x }, x))),
+            h('span', { style: { width: 64, opacity: .7 } }, '持续'),
+            h('input', {
+              type: 'range', min: 40, max: 85, value: Math.round((天气.config.persistence || 0.65) * 100),
+              onChange: (e) => 改字段('persistence', Number(e.target.value) / 100),
+            }),
+            h('span', { style: S.dim }, Math.round((天气.config.persistence || 0.65) * 100) + '%'),
+          ),
+          h('div', { style: S.dim, marginTop: 6 }, '天气比例（相对值，自动归一化）'),
+          ...Object.keys(名).map((k) =>
+            h('div', { style: S.row, key: k },
+              h('span', { style: { width: 40, opacity: .7 } }, 名[k]),
+              h('div', { style: S.bar }, h('div', { style: { ...S.fill, width: Math.round((Math.max(0, 权重[k] || 0) / 权总) * 100) + '%' } })),
+              h('input', {
+                style: { ...S.input, width: 52 },
+                value: 权重[k] ?? 0,
+                onChange: (e) => 改权重(k, e.target.value),
+              }),
+              h('span', { style: S.dim }, Math.round((Math.max(0, 权重[k] || 0) / 权总) * 100) + '%'),
+            ),
+          ),
+          h('div', { style: S.dim, marginTop: 6 }, '风力比例'),
+          ...Object.keys(风名).map((k) =>
+            h('div', { style: S.row, key: 'w' + k },
+              h('span', { style: { width: 40, opacity: .7 } }, 风名[k]),
+              h('input', {
+                style: { ...S.input, width: 52 },
+                value: 风权重[k] ?? 0,
+                onChange: (e) => 改风(k, e.target.value),
+              }),
+              h('span', { style: S.dim }, Math.round((Math.max(0, 风权重[k] || 0) / 风总) * 100) + '%'),
+            ),
+          ),
+          h('div', { style: { ...S.row, marginTop: 6 } },
+            h('span', { style: S.dim }, '年均温'),
+            h('input', { style: { ...S.input, width: 52 }, value: 天气.config.annualTemp ?? 14, onChange: (e) => 改字段('annualTemp', Number(e.target.value)) }),
+            h('span', { style: S.dim }, '季节温差'),
+            h('input', { style: { ...S.input, width: 52 }, value: 天气.config.seasonalAmp ?? 15, onChange: (e) => 改字段('seasonalAmp', Number(e.target.value)) }),
+            h('span', { style: S.dim }, '昼夜温差'),
+            h('input', { style: { ...S.input, width: 52 }, value: 天气.config.diurnalAmp ?? 5, onChange: (e) => 改字段('diurnalAmp', Number(e.target.value)) }),
+          ),
+          h('div', { style: S.row },
+            h('button', { style: S.btn, onClick: () => 存天气() }, '保存天气'),
+            h('button', { style: S.btn, onClick: 换世界 }, '换一个世界'),
+          ),
+          h('div', { style: S.dim }, '长期天气倾向，不保证每天凑齐比例。'),
         ),
 
         h('div', { style: S.h }, '参数'),

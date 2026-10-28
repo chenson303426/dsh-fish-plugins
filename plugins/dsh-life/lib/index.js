@@ -12,6 +12,7 @@ import { 加意图, 排意图, 结算阅读, 可分享阅读, 日键 as 意日�
 import { 确保机会, 该试, 提候选, 校验链, 接受链, 执行到点, 写节点事实, 能否现在睡 } from './chains.js'
 import { 候选模板, 按模板建链 } from './templates.js'
 import { 默认条件配置, 刷新天气, 生效条件, 评估活动, 设置条件, 跨天结转, 写心情 } from './conditions.js'
+import { 当前天气, 预览一年, 生成预览文本, 默认天气配置, 预设, 天气名, 风力名, 重生成, 天气配置 as 天气配置规范 } from './weather.js'
 import { 编辑计划 } from './planedit.js'
 
 export const name = 'life'
@@ -59,11 +60,21 @@ function 记账(话) {
   console.log('[life] ' + 话)
 }
 
+function 合并配置(raw) {
+  const 基 = { ...默认配置, ...(raw || {}) }
+  基.weather = { ...默认天气配置, ...((raw && raw.weather) || {}) }
+  基.weather.weights = { ...默认天气配置.weights, ...((raw && raw.weather && raw.weather.weights) || {}) }
+  基.weather.windWeights = { ...默认天气配置.windWeights, ...((raw && raw.weather && raw.weather.windWeights) || {}) }
+  return 基
+}
+
 function 读配置() {
   let cfg = { ...默认配置 }
   try {
-    cfg = { ...cfg, ...JSON.parse(readFileSync(配置路径, 'utf8').replace(/^\uFEFF/, '')) }
-  } catch (error) {}
+    cfg = 合并配置(JSON.parse(readFileSync(配置路径, 'utf8').replace(/^\uFEFF/, '')))
+  } catch (error) {
+    cfg = 合并配置(null)
+  }
   if (!cfg.targetSession) {
     try {
       const m = JSON.parse(readFileSync(心情配置, 'utf8').replace(/^\uFEFF/, ''))
@@ -754,6 +765,77 @@ export function apply(ctx) {
             } else {
               json(res, { ok: true, active: 生效条件(状态, cfg, Date.now()), weather: 状态.weather || null })
             }
+          } catch (error) {
+            json(res, { ok: false, error: String(error && error.message) }, 500)
+          }
+        },
+      }),
+    )
+
+    // 虚拟天气：读配置 / 改配置 / 换世界
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/weather',
+        handler: async (req, res) => {
+          try {
+            if (req.method === 'POST') {
+              const b = await 读体(req)
+              const 现 = 读配置()
+              const 预 = (b && b.preset && 预设[b.preset]) ? 预设[b.preset] : null
+              const 基 = 预 ? { ...现.weather, ...预 } : 现.weather
+              const 新 = {
+                ...基,
+                ...(b || {}),
+                weights: { ...基.weights, ...((b && !预 && b.weights) || {}) },
+                windWeights: { ...基.windWeights, ...((b && !预 && b.windWeights) || {}) },
+                configVersion: Number(现.weather.configVersion || 1) + 1,
+              }
+              const 圆 = Object.values(新.weights).reduce((a, x) => a + Math.max(0, Number(x) || 0), 0)
+              if (圆 <= 0) return json(res, { ok: false, error: '天气权重不能全为 0' }, 400)
+              const 全文 = (() => { try { return JSON.parse(readFileSync(配置路径, 'utf8').replace(/^\uFEFF/, '')) } catch (e) { return {} } })()
+              全文.weather = 新
+              writeFileSync(配置路径, JSON.stringify(全文, null, 2), 'utf8')
+              cfg = 读配置()
+              存状态(状态)
+              记账('天气配置已更新：预设=' + (新.preset || '自定义') + ' 持续=' + 新.persistence)
+              return json(res, { ok: true, weather: cfg.weather, preview: 生成预览文本(cfg) })
+            }
+            const w = 当前天气(状态, cfg, Date.now())
+            存状态(状态)
+            json(res, {
+              ok: true,
+              current: w.current || null,
+              slot: w.slot || null,
+              config: cfg.weather,
+              presets: Object.keys(预设),
+              preview: 生成预览文本(cfg),
+              previewPercent: 预览一年(cfg),
+            })
+          } catch (error) {
+            json(res, { ok: false, error: String(error && error.message) }, 500)
+          }
+        },
+      }),
+    )
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-life/weather/regenerate',
+        handler: async (req, res) => {
+          try {
+            const b = await 读体(req)
+            if (!b || b.confirm !== true) return json(res, { ok: false, error: '需要 confirm:true 才会换世界' }, 400)
+            const 现 = 读配置()
+            const seed = 重生成(状态)
+            const 全文 = (() => { try { return JSON.parse(readFileSync(配置路径, 'utf8').replace(/^\uFEFF/, '')) } catch (e) { return {} } })()
+            全文.weather = { ...现.weather, worldSeed: seed, configVersion: Number(现.weather.configVersion || 1) + 1 }
+            writeFileSync(配置路径, JSON.stringify(全文, null, 2), 'utf8')
+            cfg = 读配置()
+            存状态(状态)
+            记账('天气世界已重生成：' + seed)
+            json(res, { ok: true, worldSeed: seed, current: 当前天气(状态, cfg, Date.now()).current })
           } catch (error) {
             json(res, { ok: false, error: String(error && error.message) }, 500)
           }

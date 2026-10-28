@@ -8,6 +8,7 @@
 //   · 生病默认关闭；熬夜/淋雨不直接推成感冒
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from 'node:fs'
+import { 当前天气, 天气名, 风力名, 预览一年, 生成预览文本, 默认天气配置, 预设 } from './weather.js'
 import { join } from 'node:path'
 
 export const 默认条件配置 = {
@@ -22,6 +23,7 @@ export const 默认条件配置 = {
   illnessDailyChance: 0.01,
   illnessMinGapDays: 30,
   illnessHours: [24, 48],
+  weather: { ...默认天气配置 },
 }
 
 // 天气代码 → 粗分类（只做活动策略，不当气象等级）
@@ -40,60 +42,20 @@ export function 天气分类(code) {
   return 'unknown'
 }
 
-const 强降水 = new Set(['rain', 'showers', 'thunder', 'freezing_rain'])
+const 强降水 = new Set(['rain', 'showers', 'thunder', 'freezing_rain', 'drizzle'])
 
-export function 构造天气查询(cfg) {
-  const lat = Number(cfg.weatherLat)
-  const lon = Number(cfg.weatherLon)
-  return (
-    'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
-    '&current=temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m' +
-    '&hourly=apparent_temperature,precipitation_probability,weather_code' +
-    '&timezone=Asia%2FShanghai&forecast_days=2'
-  )
-}
-
-// 刷新天气到 状态.weather（缓存 1 小时；失败保留旧值并标 stale）
-export async function 刷新天气(状态, cfg, now = Date.now()) {
+// 虚拟天气：不再请求外部 API（见 weather.js）
+export function 刷新天气(状态, cfg, now = Date.now()) {
   if (cfg.weatherEnabled === false) return 状态.weather || null
-  const 缓存 = 状态.weather || null
-  const 年龄 = 缓存 ? now - Number(缓存.fetchedAt || 0) : Infinity
-  const 缓存毫秒 = (Number(cfg.weatherCacheMinutes) || 60) * 60000
-  if (缓存 && 年龄 < 缓存毫秒) return 缓存
   try {
-    const r = await fetch(构造天气查询(cfg), { signal: AbortSignal.timeout(6000) })
-    const j = await r.json()
-    const cur = (j && j.current) || {}
-    const 数据 = {
-      fetchedAt: now,
-      stale: false,
-      current: {
-        temp: Number(cur.temperature_2m),
-        feels: Number(cur.apparent_temperature),
-        precip: Number(cur.precipitation) || 0,
-        code: Number(cur.weather_code),
-        wind: Number(cur.wind_speed_10m) || 0,
-        kind: 天气分类(cur.weather_code),
-      },
-      hourly: Array.isArray(j && j.hourly && j.hourly.time)
-        ? j.hourly.time.map((t, i) => ({
-            at: Date.parse(t + ':00+08:00'),
-            feels: Number(j.hourly.apparent_temperature?.[i]),
-            pop: Number(j.hourly.precipitation_probability?.[i]),
-            code: Number(j.hourly.weather_code?.[i]),
-          }))
-        : [],
-      error: null,
-    }
-    状态.weather = 数据
-    return 数据
+    const w = 当前天气(状态, cfg, now)
+    状态.weather = w
+    return w
   } catch (error) {
-    if (缓存) {
-      缓存.stale = true
-      状态.weather = 缓存
-      return 缓存
+    状态.weather = {
+      ok: false, fetchedAt: now, stale: false, current: null, hourly: [],
+      error: String(error && error.message),
     }
-    状态.weather = { fetchedAt: 0, stale: true, current: null, hourly: [], error: String(error && error.message) }
     return 状态.weather
   }
 }
@@ -103,53 +65,55 @@ export function 天气条件(状态, cfg, now = Date.now()) {
   const w = 状态.weather
   if (!w || !w.current) {
     return {
-      id: 'weather_unknown', category: 'environment', type: 'weather', origin: 'real', basis: 'forecast',
+      id: 'weather_unknown', category: 'environment', type: 'weather', origin: 'life_simulation', basis: 'simulated',
       severity: 'minor', status: 'unknown', validFrom: now, validUntil: now + 30 * 60000,
       constraints: { scope: 'outdoor', effect: 'shorten' },
       detail: '不知道外面天气怎么样',
-    }
-  }
-  const 过期 = now - Number(w.fetchedAt || 0) > (Number(cfg.weatherStaleMinutes) || 180) * 60000
-  if (过期) {
-    return {
-      id: 'weather_stale', category: 'environment', type: 'weather', origin: 'real', basis: 'forecast',
-      severity: 'minor', status: 'unknown', validFrom: now, validUntil: now + 30 * 60000,
-      constraints: { scope: 'outdoor', effect: 'shorten' }, detail: '天气数据过期了',
     }
   }
   const c = w.current
   const 热 = Number(c.feels)
   if (Number.isFinite(热) && 热 >= (Number(cfg.hotBlockC) || 38)) {
     return {
-      id: 'weather_hot', category: 'environment', type: 'weather', origin: 'real', basis: 'forecast',
+      id: 'weather_hot', category: 'environment', type: 'weather', origin: 'life_simulation', basis: 'simulated',
       severity: 'major', status: 'active', validFrom: w.fetchedAt, validUntil: w.fetchedAt + 2 * 3600000,
       constraints: { scope: 'outdoor', effect: 'avoid' }, detail: '外面太热了（体感 ' + Math.round(热) + '℃）',
     }
   }
   if (Number.isFinite(热) && 热 >= (Number(cfg.hotCautionC) || 32)) {
     return {
-      id: 'weather_warm', category: 'environment', type: 'weather', origin: 'real', basis: 'forecast',
+      id: 'weather_warm', category: 'environment', type: 'weather', origin: 'life_simulation', basis: 'simulated',
       severity: 'minor', status: 'active', validFrom: w.fetchedAt, validUntil: w.fetchedAt + 2 * 3600000,
       constraints: { scope: 'outdoor', effect: 'shorten' }, detail: '有点热（体感 ' + Math.round(热) + '℃）',
     }
   }
   if (强降水.has(c.kind)) {
-    const 重大 = c.kind === 'thunder' || (Number(c.precip) || 0) >= 8
+    const 重大 = c.kind === 'thunder' || (Number(c.precip) || 0) >= 12
     return {
-      id: 'weather_rain', category: 'environment', type: 'weather', origin: 'real', basis: 'forecast',
+      id: 'weather_rain', category: 'environment', type: 'weather', origin: 'life_simulation', basis: 'simulated',
       severity: 重大 ? 'major' : 'moderate', status: 'active',
       validFrom: w.fetchedAt, validUntil: w.fetchedAt + 2 * 3600000,
       constraints: { scope: 'outdoor', effect: 重大 ? 'avoid' : 'shorten' },
-      detail: 重大 ? '外面在下大雨' : '外面在下雨',
+      detail: (c.realKind === 'storm' ? '外面在打雷下雨' : c.realKind === 'drizzle' ? '外面在下小雨' : '外面在下大雨'),
     }
   }
+  // 现在是干的，但下一个时段要下雨 → 只说"可能"
+  if (['drizzle', 'rain', 'storm'].includes(String(w.nextKind || ''))) {
+    return {
+      id: 'weather_prob', category: 'environment', type: 'weather', origin: 'life_simulation', basis: 'simulated',
+      severity: 'minor', status: 'active', validFrom: now, validUntil: now + 90 * 60000,
+      constraints: { scope: 'outdoor', effect: 'shorten' },
+      detail: '过会儿可能会下雨（' + (w.nextName || '雨') + '）',
+    }
+  }
+
   // 现在没下，但两小时内降水概率高 → 只作"可能"，不是"已经下了"
   try {
     const 未来 = (w.hourly || []).filter((h) => h.at >= now - 1800000 && h.at <= now + 2 * 3600000)
     const 最高 = 未来.reduce((m, h) => Math.max(m, Number(h.pop) || 0), 0)
     if (最高 >= 60) {
       return {
-        id: 'weather_prob', category: 'environment', type: 'weather', origin: 'real', basis: 'forecast',
+        id: 'weather_prob', category: 'environment', type: 'weather', origin: 'life_simulation', basis: 'simulated',
         severity: 'minor', status: 'active', validFrom: now, validUntil: now + 90 * 60000,
         constraints: { scope: 'outdoor', effect: 'shorten' },
         detail: '过会儿可能会下雨（降水概率 ' + 最高 + '%）',
