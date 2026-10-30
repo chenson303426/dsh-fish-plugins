@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } fr
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { 生成计划, 抽插曲, 日键, 候选池 } from './plan.js'
-import { 推进, 渲染, 当前项, 当天插曲, 渲染流水 } from './advance.js'
+import { 推进, 渲染, 当前项, 当天插曲, 渲染流水, 渲染接下来 } from './advance.js'
 import { 加意图, 排意图, 结算阅读, 可分享阅读, 日键 as 意日键 } from './intentions.js'
 import { 确保机会, 该试, 提候选, 校验链, 接受链, 执行到点, 写节点事实, 能否现在睡 } from './chains.js'
 import { 候选模板, 按模板建链 } from './templates.js'
@@ -366,7 +366,23 @@ export function apply(ctx) {
   }
 
   let 上次条件维护 = 0
-  async function 条件维护() {
+  function 社交可行() {
+  try {
+    const r = 评估活动(状态, cfg, { title: '社交活动', kind: 'social', outdoor: false }, Date.now())
+    const 身体 = (生效条件(状态, cfg, Date.now()) || []).filter((c) => c.category === 'body' && c.status === 'active')
+    return {
+      allowed: r.decision !== 'blocked' && 身体.length === 0,
+      decision: r.decision,
+      reasons: [...(r.reasons || []), ...身体.map((c) => ({ conditionId: c.id, category: 'body', effect: c.constraints && c.constraints.effect, severity: c.severity, basis: c.basis }))],
+      adjustments: r.adjustments || [],
+      alternatives: r.alternatives || [],
+    }
+  } catch (error) {
+    return { allowed: true, decision: 'unknown', reasons: [] }
+  }
+}
+
+async function 条件维护() {
     if (Date.now() - 上次条件维护 < 10 * 60000) return
     上次条件维护 = Date.now()
     try {
@@ -456,6 +472,8 @@ export function apply(ctx) {
                 globalThis.__life_注入日志 = Date.now()
                 记账('注入：' + 行)
               }
+              const 部分 = []
+              if (行) 部分.push(行)
               // 这一轮在问"今天干了什么" → 追加今天的流水（只说一次）
               if (要流水) {
                 const 词 = 要流水
@@ -463,10 +481,13 @@ export function apply(ctx) {
                 const 流水 = 渲染流水(状态, Date.now())
                 if (流水) {
                   记账('流水注入：' + 词)
-                  return (行 ? 行 + '\n' : '') + 流水
+                  部分.push(流水)
                 }
               }
-              return 行
+              // 还没发生的计划：明确写成"打算"，不能和流水混
+              const 接下来 = 渲染接下来(状态, Date.now(), Number(cfg.injectMaxChars) || 80)
+              if (接下来) 部分.push(接下来)
+              return 部分.join('\n')
             } catch (error) {
               return ''
             }
@@ -570,6 +591,23 @@ export function apply(ctx) {
     ctx.effect(() =>
       ctx.webServer.register({
         kind: 'exact',
+        path: '/dsh-life/upcoming',
+        handler: async (req, res) => {
+          const now = Date.now()
+          const 行 = 渲染接下来(状态, now, Number(cfg.injectMaxChars) || 80)
+          const 列表 = (状态.plan || [])
+            .filter((it) => Number(it.startAt) > now && it.status !== 'cancelled' && it.status !== 'skipped')
+            .sort((x, y) => Number(x.startAt) - Number(y.startAt))
+            .slice(0, 6)
+            .map((it) => ({ title: it.title, kind: it.kind, startAt: it.startAt, endAt: it.endAt, status: it.status || 'scheduled' }))
+          json(res, { ok: true, line: 行, items: 列表 })
+        },
+      }),
+    )
+
+    ctx.effect(() =>
+      ctx.webServer.register({
+        kind: 'exact',
         path: '/dsh-life/config',
         handler: async (req, res) => {
           try {
@@ -612,6 +650,20 @@ export function apply(ctx) {
             const body = await 读体(req)
             if (!body || !body.title) return json(res, { ok: false, error: '缺 title' }, 400)
             const dayKey = 意日键(new Date())
+            const 是社交 = body.kind === 'social' || body.social === true
+            if (是社交) {
+              const 判 = 社交可行()
+              if (!判.allowed) {
+                const 条 = 加意图(状态, cfg, { ...body, kind: 'other' }, dayKey)
+                条.social = true
+                条.blockedBy = { reason: 'body/social 条件不满足', decision: 判.decision, reasons: 判.reasons }
+                条.status = 'blocked'
+                存状态(状态)
+                记账('社交安排被拒：' + 条.title)
+                return json(res, { ok: false, reason: 'body/social 条件不满足', details: 判, intention: 条 })
+              }
+              body.social = true
+            }
             const 条 = 加意图(状态, cfg, body, dayKey)
             // 只把新意图插进今天的空档，不整天重排
             const 插了 = 排意图(状态, cfg, 状态.dayKey || dayKey, 状态.plan || [])

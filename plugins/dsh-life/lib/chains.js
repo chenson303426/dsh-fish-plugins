@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { 种子, 骰 } from './plan.js'
+import { 生效条件, 评估活动 } from './conditions.js'
 
 const 允许效果 = [
   'record',
@@ -105,11 +106,22 @@ export function 造提示(state, cfg, now) {
       const b = new Date(it.endAt).toTimeString().slice(0, 5)
       return a + '–' + b + ' ' + it.title + (it.objectId ? '（在读书）' : '')
     })
+  const 条件行 = (() => {
+    try {
+      const 列 = (生效条件(state, cfg, now) || []).filter((c) => c.status === 'active' || c.status === 'unknown')
+      if (!列.length) return ''
+      const 说法 = 列.slice(0, 3).map((c) => (c.detail || c.type) + '（' + (c.constraints && c.constraints.scope) + '，' + (c.constraints && c.constraints.effect) + '）')
+      return '今天的条件：' + 说法.join('；') + '。不要提与这些条件矛盾的链（比如下雨还安排户外活动）。'
+    } catch (error) {
+      return ''
+    }
+  })()
   const 近三天 = (state.chains || []).filter((c) => now - c.createdAt < 3 * 86400000).length
   return [
     '她的今天：',
     ...计划,
     '',
+    ...(条件行 ? [条件行, ''] : []),
     '最近 3 天已有 ' + 近三天 + ' 条事件链（每天最多 1 条）。',
     '请判断今天要不要发生一件“小插曲”，它必须真的改变后续安排，而不是只写一句气氛。',
     '要求：最多 3 个节点、最多 2 个 effect；宁可不提；不要每天都出事。',
@@ -246,6 +258,19 @@ export function 校验链(chain, state, cfg, now) {
       status: 'pending',
     })
   }
+  // 条件拦截：effect 作用的活动若被条件判定 blocked，整条链拒绝
+  try {
+    for (const e of cleanEffects) {
+      if (!e.params) continue
+      const 名 = e.params.title || e.params.itemId
+      const 目标 = 找项(state, 名, now, false) || 当前项名(state, now, 名)
+      if (!目标) continue
+      const 户外 = /散步|逛街|运动|出门|爬山|骑车/.test(String(目标.title))
+      const 判 = 评估活动(state, cfg, { title: 目标.title, kind: 目标.kind, outdoor: 户外 }, now)
+      if (判 && 判.decision === 'blocked') errs.push('条件不允许：' + 目标.title + (判.reasons && 判.reasons[0] && 判.reasons[0].conditionId ? '（' + 判.reasons[0].conditionId + '）' : ''))
+    }
+  } catch (error) {}
+
   return { ok: errs.length === 0, errors: errs, nodes: cleanNodes, effects: cleanEffects }
 }
 

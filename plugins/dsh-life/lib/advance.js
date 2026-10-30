@@ -229,3 +229,22 @@ export function 渲染流水(state, now = Date.now()) {
   if (行.length > 120) 行 = 行.slice(0, 119) + '…'
   return 行
 }
+
+// 接下来的计划（还没发生，只是打算）：一行，≤80 字，最多 3 条
+export function 渲染接下来(state, now = Date.now(), 上限 = 80) {
+  const dayStart = new Date(now)
+  const 明日0点 = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() + 1).getTime()
+  const 列表 = (state.plan || [])
+    .filter((it) => {
+      if (it.status === 'cancelled' || it.status === 'skipped') return false
+      const 起 = Number(it.startAt)
+      return 起 > now && 起 < 明日0点
+    })
+    .sort((x, y) => Number(x.startAt) - Number(y.startAt))
+    .slice(0, 3)
+  if (!列表.length) return ''
+  const 段 = 列表.map((it) => 时(it.startAt) + '-' + 时(it.endAt) + ' ' + it.title)
+  let 行 = '【接下来】' + 段.join('｜')
+  if (行.length > 上限) 行 = 行.slice(0, Math.max(0, 上限 - 1)) + '…'
+  return 行
+}
